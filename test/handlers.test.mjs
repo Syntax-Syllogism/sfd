@@ -430,3 +430,280 @@ test("a TraceFlag notice survives a missing latest log or failed log query", asy
   conn.query = async () => { throw new Error("cannot list"); };
   await assert.rejects(handlers.logs({}), e => e.trace?.action === "created" && /cannot list/.test(e.message));
 });
+
+
+test("query limits stop paging and slice records while preserving server metadata", async () => {
+  for (const tooling of [false, true]) for (const raw of [false, true]) {
+    for (const limit of [undefined, 1, 2, 3, 5, 6, 9]) {
+      const { handlers, conn } = fixture();
+      const api = tooling ? (conn.tooling = {}) : conn;
+      const record = id => ({ attributes: { type: "Account" }, Id: id });
+      api.query = async () => ({ totalSize: 6, done: false, records: [record(1), record(2)], nextRecordsUrl: "2" });
+      const pages = [];
+      api.queryMore = async url => {
+        pages.push(url);
+        const page = Number(url);
+        return { done: page === 3, records: [record(page * 2 - 1), record(page * 2)], nextRecordsUrl: page === 2 ? "3" : undefined };
+      };
+      const result = await handlers.query({ q: "SELECT Id FROM Account", limit, tooling, raw });
+      const shown = Math.min(limit ?? 6, 6);
+      assert.deepEqual(result.records.map(r => r.Id), Array.from({ length: shown }, (_, i) => i + 1));
+      assert.equal(result.totalSize, 6);
+      assert.equal(result.truncated, shown < 6 ? true : undefined);
+      assert.equal(pages.length, Math.ceil(shown / 2) - 1);
+      assert.equal(result.done, shown > 4);
+      assert.equal(result.nextRecordsUrl, shown <= 2 ? "2" : shown <= 4 ? "3" : undefined);
+      assert.equal(Boolean(result.records[0].attributes), raw);
+    }
+  }
+});
+
+function orgListFixture(t) {
+  const home = mkdtempSync(join(tmpdir(), "sfd-org-list-"));
+  mkdirSync(join(home, ".sfdx"));
+  const fields = new Map();
+  const aliases = new Map();
+  const defaults = {};
+  const calls = { creates: [], refreshes: [], queries: [], clears: 0 };
+  const behavior = new Map();
+  let listingError;
+  const core = {
+    AuthInfo: {
+      listAllAuthorizations: async () => {
+        if (listingError) throw listingError;
+        return [...fields.keys()].map(username => ({ username, accessToken: "list-secret" }));
+      },
+      create: async ({ username }) => {
+        const data = fields.get(username);
+        if (data.unreadable) throw new Error("secret auth failure");
+        return { getFields: decrypt => {
+          if (decrypt && data.decryptFails) throw new Error("cannot decrypt");
+          return { username, ...data };
+        } };
+      }
+    },
+    ConfigAggregator: { create: async () => ({ reload: async () => {}, getPropertyValue: key => defaults[key] }) },
+    StateAggregator: {
+      getInstance: async () => ({ aliases: { getAll: username => aliases.get(username) ?? [] } }),
+      clearInstanceAsync: async () => { calls.clears++; }
+    },
+    Org: { create: async ({ aliasOrUsername: username }) => {
+      calls.creates.push(username);
+      return {
+        refreshAuth: async () => { calls.refreshes.push(username); return behavior.get(username)?.(); },
+        getConnection: () => ({ query: async query => {
+          calls.queries.push({ username, query });
+          return behavior.get(username)?.() ?? { records: [] };
+        } })
+      };
+    } }
+  };
+  const handlers = createHandlers("unused", { home, load: name => name === "@salesforce/core" ? core : {} });
+  t.after(async () => { const { rmSync } = await import("node:fs"); rmSync(home, { recursive: true, force: true }); });
+  return { handlers, fields, aliases, defaults, calls, behavior, home, setListingError: error => { listingError = error; } };
+}
+
+test("org list reads local primary users, resolves aliases/defaults, filters expiry and allows only public fields", async t => {
+  const f = orgListFixture(t);
+  f.fields.set("primary", { orgId: "00D000000000001AAA", instanceUrl: "https://example", isDevHub: true,
+    accessToken: "access-secret", refreshToken: "refresh-secret", clientSecret: "client-secret" });
+  f.fields.set("secondary", { orgId: "00D000000000001AAA" });
+  f.fields.set("default-secondary", { orgId: "00D000000000001AAA", isSandbox: true, decryptFails: true });
+  f.fields.set("unreadable", { unreadable: true });
+  f.fields.set("expired", { expirationDate: "2000-01-01", devHubUsername: "primary" });
+  f.fields.set("scratch", { expirationDate: "2099-01-01" });
+  writeFileSync(join(f.home, ".sfdx", "00D000000000001AAA.json"), JSON.stringify({ usernames: ["primary", "secondary", "default-secondary"] }));
+  f.aliases.set("primary", ["hub"]);
+  f.aliases.set("default-secondary", ["dev", "other"]);
+  f.defaults["target-org"] = "other";
+  f.defaults["target-dev-hub"] = "primary";
+  const warnings = [];
+  t.mock.method(console, "warn", (...args) => warnings.push(args.join(" ")));
+  const result = await f.handlers.orgList({});
+  assert.equal(result.hiddenExpired, 1);
+  assert.deepEqual(result.orgs.map(o => o.username), ["scratch", "default-secondary", "primary"]);
+  assert.equal(result.orgs.find(o => o.username === "default-secondary").isDefault, true);
+  assert.equal(result.orgs.find(o => o.username === "default-secondary").type, "Sandbox");
+  assert.deepEqual(result.orgs.find(o => o.username === "primary"), {
+    alias: "hub", username: "primary", orgId: "00D000000000001AAA", instanceUrl: "https://example",
+    type: "DevHub", isDefault: false, isDefaultDevHub: true
+  });
+  assert.equal(warnings.length, 1);
+  assert.doesNotMatch(JSON.stringify([result, warnings]), /access-secret|refresh-secret|client-secret|list-secret|secret auth failure|accessToken|refreshToken|clientSecret/);
+  assert.deepEqual(f.calls.creates, []);
+  assert.equal((await f.handlers.orgList({ all: true })).orgs.length, 4);
+  assert.deepEqual((await f.handlers.orgList({ all: true })).orgs.find(o => o.username === "expired").expired, true);
+});
+
+test("org list handles absent auth and invalidates state for login/logout stamps", async t => {
+  const f = orgListFixture(t);
+  f.setListingError(Object.assign(new Error(), { name: "NoAuthInfoFound" }));
+  assert.deepEqual(await f.handlers.orgList({}), { orgs: [], hiddenExpired: 0 });
+  f.setListingError(new Error("unexpected"));
+  await assert.rejects(f.handlers.orgList({}), /unexpected/);
+  f.setListingError(undefined);
+  f.fields.set("first", {});
+  await f.handlers.orgList({ status: true });
+  assert.equal(f.calls.creates.length, 1);
+  writeFileSync(join(f.home, ".sfdx", "new-user.json"), "{}");
+  const future = new Date(Date.now() + 10000);
+  utimesSync(join(f.home, ".sfdx"), future, future);
+  f.fields.delete("first");
+  f.fields.set("second", {});
+  const result = await f.handlers.orgList({});
+  assert.equal(f.calls.clears, 1);
+  assert.equal(result.orgs[0].username, "second");
+});
+
+test("org list checks connections concurrently, bounds hangs and retries failed refreshes", async t => {
+  const f = orgListFixture(t);
+  for (const name of ["hanging", "working", "broken"]) f.fields.set(name, {});
+  f.behavior.set("hanging", () => new Promise(() => {}));
+  f.behavior.set("broken", () => { throw Object.assign(new Error("secret"), { name: "RefreshTokenAuthError" }); });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const resultPromise = f.handlers.orgList({ status: true });
+  // Let the async auth/Org.create steps settle before advancing the deadline.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(f.calls.refreshes.sort(), ["broken", "hanging", "working"]);
+  t.mock.timers.tick(10000);
+  const result = await resultPromise;
+  assert.deepEqual(result.orgs.map(o => [o.username, o.status]), [
+    ["broken", "RefreshTokenAuthError"], ["hanging", "Timeout"], ["working", "Connected"]
+  ]);
+  f.behavior.delete("hanging");
+  f.behavior.delete("broken");
+  await f.handlers.orgList({ status: true });
+  assert.equal(f.calls.creates.filter(name => name === "working").length, 1);
+  assert.equal(f.calls.creates.filter(name => name === "broken").length, 2);
+  assert.equal(f.calls.creates.filter(name => name === "hanging").length, 2);
+});
+
+test("org list queries each Dev Hub once and uses live scratch status before filtering", async t => {
+  const f = orgListFixture(t);
+  for (const [username, orgId, hub] of [["active", "00D000000000001AAA", "hub"], ["expired", "00D000000000002AAA", "hub"], ["offline", "00D000000000003AAA", "bad-hub"]]) {
+    f.fields.set(username, { orgId, expirationDate: "2099-01-01", devHubUsername: hub });
+  }
+  f.behavior.set("hub", () => ({ records: [
+    { ScratchOrg: "00D000000000001", Status: "Active", ExpirationDate: "2099-02-01" },
+    { ScratchOrg: "00D000000000002", Status: "Expired", ExpirationDate: "2000-01-01" }
+  ] }));
+  f.behavior.set("bad-hub", () => { throw new Error("unavailable"); });
+  const result = await f.handlers.orgList({ status: true });
+  assert.equal(f.calls.queries.length, 2);
+  assert.match(f.calls.queries.find(q => q.username === "hub").query, /IN \('00D000000000001','00D000000000002'\)/);
+  assert.deepEqual(f.calls.refreshes, []);
+  assert.equal(result.hiddenExpired, 1);
+  assert.equal(result.orgs.find(o => o.username === "active").status, "Active");
+  assert.equal(result.orgs.find(o => o.username === "active").expirationDate, "2099-02-01");
+  assert.equal(result.orgs.find(o => o.username === "offline").status, undefined);
+});
+
+function metadataFixture() {
+  const fixtureData = fixture();
+  const { conn, calls } = fixtureData;
+  calls.describes = [];
+  calls.lists = [];
+  conn.getApiVersion = () => "67.0";
+  conn.metadata = {
+    describe: async version => {
+      calls.describes.push(version);
+      return { metadataObjects: [
+        ...["Flow", "Layout", "ApexClass", "ApexTrigger", "CustomObject", "PermissionSet", "CustomMetadata"].map(xmlName => ({ xmlName })),
+        ...["Report", "Dashboard", "Document", "EmailTemplate"].map(xmlName => ({ xmlName, inFolder: true })),
+        { xmlName: "Parent", childXmlNames: "Child" }
+      ] };
+    },
+    list: async (queries, version) => {
+      calls.lists.push({ queries, version });
+      return queries.flatMap(({ type }) => [{ type, fullName: "Z" }, { type, fullName: "A" }]);
+    }
+  };
+  return fixtureData;
+}
+
+test("metadata descriptions cache by org/version and reset on reload and auth changes", async () => {
+  const { handlers, calls, conn, home } = metadataFixture();
+  const first = await handlers.listMetadataTypes({ org: "dev" });
+  assert.equal(first.cached, false);
+  assert.equal(first.apiVersion, "67.0");
+  assert.deepEqual(first.types.find(t => t.name === "Parent").children, ["Child"]);
+  assert.deepEqual(first.types.map(t => t.name), first.types.map(t => t.name).sort());
+  assert.equal((await handlers.listMetadataTypes({ org: "dev" })).cached, true);
+  assert.equal(calls.describes.length, 1);
+  await handlers.listMetadataTypes({ org: "other" });
+  conn.getApiVersion = () => "68.0";
+  await handlers.listMetadataTypes({ org: "dev" });
+  assert.deepEqual(calls.describes, ["67.0", "67.0", "68.0"]);
+  await handlers.reload();
+  assert.equal((await handlers.listMetadataTypes({ org: "dev" })).cached, false);
+  mkdirSync(join(home, ".sfdx"));
+  assert.equal((await handlers.listMetadataTypes({ org: "dev" })).cached, false);
+  assert.equal(calls.describes.length, 5);
+});
+
+test("failed metadata describes retry; simultaneous requests share a pending describe", async () => {
+  const { handlers, conn, calls } = metadataFixture();
+  const describe = conn.metadata.describe;
+  conn.metadata.describe = async () => { throw new Error("unavailable"); };
+  await assert.rejects(handlers.listMetadataTypes({}), /unavailable/);
+  conn.metadata.describe = describe;
+  await Promise.all([handlers.listMetadataTypes({}), handlers.listMetadataTypes({})]);
+  assert.equal(calls.describes.length, 1);
+});
+
+test("metadata members batch seven types into three queries per call and remain live", async () => {
+  const { handlers, calls } = metadataFixture();
+  const types = ["Flow", "Layout", "ApexClass", "ApexTrigger", "CustomObject", "PermissionSet", "CustomMetadata"];
+  const result = await handlers.listMetadata({ org: "dev", types });
+  assert.deepEqual(calls.lists.map(c => c.queries.length), [3, 3, 1]);
+  assert.ok(calls.lists.every(c => c.version === "67.0"));
+  assert.deepEqual(result.groups.map(g => g.type), types);
+  assert.ok(result.groups.every(g => g.members.map(m => m.fullName).join() === "A,Z"));
+  await handlers.listMetadata({ org: "dev", types: ["Flow"] });
+  assert.equal(calls.lists.length, 4);
+  assert.equal(calls.describes.length, 1);
+});
+
+test("folder listing uses folder types, respects explicit folders and normalizes API responses", async () => {
+  const { handlers, conn, calls } = metadataFixture();
+  for (const [type, folderType] of [["Report", "ReportFolder"], ["Dashboard", "DashboardFolder"], ["Document", "DocumentFolder"], ["EmailTemplate", "EmailFolder"]]) {
+    conn.metadata.list = async queries => {
+      assert.deepEqual(queries, [{ type: folderType }]);
+      return { type: folderType, fullName: "Public", id: "excluded", lastModifiedByName: "User" };
+    };
+    const { groups } = await handlers.listMetadata({ types: [type] });
+    assert.equal(groups[0].folders, true);
+    assert.equal(groups[0].folderType, folderType);
+    assert.equal(groups[0].members[0].fullName, "Public");
+    assert.equal(groups[0].members[0].id, undefined);
+  }
+  conn.metadata.list = async queries => {
+    assert.deepEqual(queries, [{ type: "Report", folder: "Public" }]);
+    return undefined;
+  };
+  assert.deepEqual((await handlers.listMetadata({ types: ["Report"], folder: "Public" })).groups,
+    [{ type: "Report", members: [] }]);
+  const describe = conn.metadata.describe;
+  conn.metadata.describe = async version => {
+    const result = await describe(version);
+    result.metadataObjects.push({ xmlName: "EmailTemplateFolder" });
+    return result;
+  };
+  await handlers.reload();
+  conn.metadata.list = async queries => { assert.deepEqual(queries, [{ type: "EmailTemplateFolder" }]); return []; };
+  await handlers.listMetadata({ types: ["EmailTemplate"] });
+  assert.equal(calls.describes.length, 2);
+});
+
+test("metadata rejects unknown types with helpful suggestions before listing", async () => {
+  const { handlers, calls } = metadataFixture();
+  for (const type of ["ApexClas", "apexclass", "ApexCl", "ApexClaxs"]) {
+    await assert.rejects(handlers.listMetadata({ types: [type] }), error => error.name === "UsageError" && /Did you mean ApexClass/.test(error.message));
+  }
+  await assert.rejects(handlers.listMetadata({ types: ["NotAType"] }), { name: "UsageError" });
+  await assert.rejects(handlers.listMetadata({ types: [] }), { name: "UsageError" });
+  await assert.rejects(handlers.listMetadata({ types: ["Flow", "Layout"], folder: "x" }), { name: "UsageError" });
+  assert.equal(calls.lists.length, 0);
+  await handlers.listMetadata({ types: ["Child"] });
+  assert.equal(calls.lists.length, 1);
+});

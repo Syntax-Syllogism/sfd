@@ -2,7 +2,7 @@
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 const skip = reason => ({ skip: reason });
 
-function lex(source) {
+export function lex(source) {
   const tokens = [];
   let i = 0;
   while (i < source.length) {
@@ -44,6 +44,8 @@ const wait = ["w wait", "-w", true];
 const level = ["l test-level", "-l", true];
 const tests = ["t tests", "-t", true, true];
 const mappings = [
+  { sf: "org list metadata-types", sfd: "list-metadata-types", flags: [org, json] },
+  { sf: "org list metadata", sfd: "list-metadata", flags: [org, json, ["m metadata-type", "-m", true], ["folder", "--folder", true]] },
   { sf: "apex list log", sfd: "logs", flags: [org, json] },
   { sf: "apex get log", sfd: "logs get", flags: [org, json, ["i log-id", "", true], ["n number", "", true]] },
   { sf: "data query", sfd: "query", flags: [org, json, tooling, ["q query", "", true], ["all-rows", "--all", false], format], required: "q" },
@@ -53,6 +55,7 @@ const mappings = [
   { sf: "project deploy start", sfd: "deploy", flags: [org, json, wait, level, tests, ["d source-dir", "-d", true, true], ["m metadata", "-m", true, true], ["dry-run", "--check-only", false]] },
   { sf: "sobject describe", sfd: "describe", flags: [org, json, tooling, ["s sobject", "", true]], required: "s" },
   { sf: "api request rest", sfd: "rest", flags: [org, ["X method", "-X", true], ["b body", "--body", true]], positional: true },
+  { sf: "org list", sfd: "org list", flags: [["all", "--all", false], ["skip-connection-status", "", false], ["json", "--json", false]] },
   { sf: "org display", sfd: "org", flags: [org, json] }
 ];
 
@@ -82,14 +85,19 @@ function mapArgs(argv) {
       }
     } else if (match[3] !== undefined) return skip(`unsupported boolean value ${arg}`);
     seen.set(key, values);
-    if (key === "r" && !["human", "json"].includes(values[0])) return skip(`unsupported result format ${values[0]}`);
+    if (key === "r") {
+      if (mapping.sfd === "query" && values[0] === "csv") output.push("--csv");
+      else if (!["human", "json"].includes(values[0])) return skip(`unsupported result format ${values[0]}`);
+    }
     if (key === "w" && (!Number.isFinite(Number(values[0])) || Number(values[0]) <= 0)) return skip("wait must be positive");
     if (target) {
       if (takesValue) for (const v of values) output.push(target, quote(v));
       else output.push(target);
     }
   }
+  if (mapping.sfd === "org list" && !seen.has("skip-connection-status")) output.push("--status");
   if (mapping.required && !seen.has(mapping.required)) return skip(`missing required ${mapping.required} flag`);
+  if (mapping.sfd === "list-metadata" && !seen.has("m")) return skip("metadata listing needs metadata-type");
   if (mapping.sfd === "deploy" && !seen.has("d") && !seen.has("m")) return skip("deploy needs source-dir or metadata");
   if (mapping.sfd === "retrieve" && ["d", "m", "x"].filter(key => seen.has(key)).length > 1) return skip("retrieve selectors are mutually exclusive");
   if (mapping.sfd === "test" && !seen.has("w") && !seen.has("y")) return skip("asynchronous tests need --wait or --synchronous");

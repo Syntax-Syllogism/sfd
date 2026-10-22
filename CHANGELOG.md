@@ -14,6 +14,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   named pipe, finds `sf` with `where` (including npm `sf.cmd` shims), and
   starts without a console window. CI runs on Windows as well as Linux.
 
+## [0.4.0] - 2026-10-22
+
+### Added
+
+- `--limit` and `--csv` options for `sfd query`, with CSV output
+- `sfd agents-snippet` command that generates a snippet for AGENTS.md and CLAUDE.md
+- `sfd org list` command that lists locally authenticated orgs, with optional status checks
+- `sfd list-metadata-types` and `sfd list-metadata` commands for browsing org metadata
+- `sfd discover` command that reports missed opportunities to use `sfd` in place of `sf`
+
 ## [0.3.1] - 2026-10-22
 
 ### Changed

@@ -1,10 +1,28 @@
 // Stand-in for src/handlers.mjs so the CLI and daemon lifecycle can be tested without an org.
 export function createHandlers() {
   return {
+    org: async ({ org }) => ({ alias: org }),
+    orgList: async args => {
+      if ("org" in args) throw new Error("Unexpected target org");
+      return { orgs: [{ alias: args.all ? "all" : "dev", username: "user", type: "Org", isDefault: true,
+        ...(args.status ? { status: "Connected" } : {}) }], hiddenExpired: 0 };
+    },
+    listMetadataTypes: async () => ({ types: [{ name: "ApexClass", inFolder: false, children: [] }], apiVersion: "67.0", cached: true }),
+    listMetadata: async args => {
+      if (args.types.includes("ApexClas")) throw Object.assign(new Error("Unknown metadata type: ApexClas. Did you mean ApexClass?"), { name: "UsageError" });
+      return { ...args, groups: args.types.map(type => ({ type, members: [{ fullName: args.folder ? `${args.folder}/Name` : "Name", manageableState: "unmanaged" }] })) };
+    },
     ping: async () => ({ pong: true }),
     status: async () => ({ pid: process.pid, uptimeSeconds: 0, orgs: [] }),
     reload: async () => ({ reloaded: true }),
-    query: async ({ org, q }) => ({ totalSize: 1, done: true, records: [{ org, q }] }),
+    query: async ({ org, q, limit }) => {
+      if (q === "empty") return { totalSize: 0, done: true, records: [] };
+      if (q === "rows") {
+        const records = [{ Name: "A", Owner: { Name: "User" } }, { Name: "B", Owner: null }];
+        return { totalSize: 5012, done: false, records: records.slice(0, limit), ...(limit ? { truncated: true } : {}) };
+      }
+      return { totalSize: 1, done: true, records: [{ org, q }] };
+    },
     apex: async ({ body }) => body.includes("bad")
       ? { compiled: false, success: false, diagnostic: [{ compileProblem: "Unexpected token", lineNumber: 1, columnNumber: 1 }] }
       : { compiled: true, success: true, logs: "x|USER_DEBUG|[1]|DEBUG|hi" },

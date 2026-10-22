@@ -1,9 +1,9 @@
-import { statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { UsageError } from "./usage-error.mjs";
 import { sfRequire } from "./sf-root.mjs";
-import { compactDescribe, compactQuery, summarizeDeploy, summarizeTests, summarizeRetrieve, summarizeChanges } from "./format.mjs";
+import { asArray, compactDescribe, compactQuery, summarizeDeploy, summarizeTests, summarizeRetrieve, summarizeChanges } from "./format.mjs";
 
 const soqlString = value => `'${String(value).replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
 const LOG_FIELDS = "Id, LogUser.Username, Operation, Request, Status, LogLength, StartTime, DurationMilliseconds";
@@ -67,6 +67,16 @@ export async function ensureTrace(conn, userId) {
   return { action: flag ? "extended" : "created", id: flag?.Id ?? result.id, expires: dates.ExpirationDate };
 }
 
+async function withDeadline(fn) {
+  let timer;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(fn),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error(), { name: "Timeout" })), 10000); })
+    ]);
+  } finally { clearTimeout(timer); }
+}
+
 const SESSION_ERRORS = new Set(["INVALID_SESSION_ID", "INVALID_AUTH_HEADER"]);
 
 function authStamp(home) {
@@ -86,6 +96,24 @@ function serial() {
   };
 }
 
+function metadataSuggestion(name, names) {
+  const input = name.toLowerCase();
+  const distance = candidate => {
+    let row = Array.from({ length: input.length + 1 }, (_, i) => i);
+    for (const char of candidate.toLowerCase()) {
+      const next = [row[0] + 1];
+      for (let i = 1; i <= input.length; i++) {
+        next[i] = Math.min(next[i - 1] + 1, row[i] + 1, row[i - 1] + (input[i - 1] === char ? 0 : 1));
+      }
+      row = next;
+    }
+    return row[input.length];
+  };
+  return names.find(n => n.toLowerCase().startsWith(input)) ??
+    names.map(name => ({ name, distance: distance(name) })).filter(n => n.distance <= 2)
+      .sort((a, b) => a.distance - b.distance)[0]?.name;
+}
+
 export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRoot) } = {}) {
   const req = load;
   const core = req("@salesforce/core");
@@ -97,6 +125,7 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
   const projectQueue = serial();
 
   const orgs = new Map();
+  const typeCache = new Map();
   const traces = new Map();
   const traceQueue = serial();
   const traceFor = (conn, alias, user, noTrace) => noTrace ? undefined : traceQueue(async () => {
@@ -108,14 +137,22 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
   });
   let stamp = authStamp(home);
 
-  async function getOrg(alias) {
+  let refreshing;
+  async function refreshIfAuthChanged() {
+    if (refreshing) await refreshing;
     const now = authStamp(home);
     if (now !== stamp) {
       stamp = now;
       orgs.clear();
       traces.clear();
-      await core.StateAggregator.clearInstanceAsync();
+      typeCache.clear();
+      refreshing = core.StateAggregator.clearInstanceAsync();
+      try { await refreshing; } finally { refreshing = undefined; }
     }
+  }
+
+  async function getOrg(alias) {
+    await refreshIfAuthChanged();
     if (!orgs.has(alias)) {
       const pending = core.Org.create({ aliasOrUsername: alias });
       orgs.set(alias, pending);
@@ -133,9 +170,25 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       if (!SESSION_ERRORS.has(e.errorCode ?? e.name)) throw e;
       orgs.delete(alias);
       traces.delete(alias);
+      typeCache.delete(alias);
       const org = await getOrg(alias);
       return fn(org.getConnection(), org);
     }
+  }
+
+  async function metadataTypes(alias, conn) {
+    const apiVersion = conn.getApiVersion();
+    let versions = typeCache.get(alias);
+    if (!versions) typeCache.set(alias, versions = new Map());
+    const cached = versions.has(apiVersion);
+    if (!cached) {
+      const pending = conn.metadata.describe(apiVersion).then(result => asArray(result.metadataObjects)
+        .map(t => ({ name: t.xmlName, inFolder: Boolean(t.inFolder), children: asArray(t.childXmlNames) }))
+        .sort((a, b) => a.name.localeCompare(b.name)));
+      versions.set(apiVersion, pending);
+      pending.catch(() => { if (versions.get(apiVersion) === pending) versions.delete(apiVersion); });
+    }
+    return { types: await versions.get(apiVersion), apiVersion, cached };
   }
 
   return {
@@ -150,6 +203,7 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
     reload: async () => {
       orgs.clear();
       traces.clear();
+      typeCache.clear();
       await core.StateAggregator.clearInstanceAsync();
       return { reloaded: true };
     },
@@ -158,17 +212,105 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       alias: org, username: o.getUsername(), orgId: o.getOrgId(), instanceUrl: conn.instanceUrl, apiVersion: conn.getApiVersion()
     })),
 
-    query: ({ org, q, tooling, all, raw }) => withConn(org, async conn => {
+    orgList: async ({ all = false, status = false } = {}) => {
+      await refreshIfAuthChanged();
+      const state = await core.StateAggregator.getInstance();
+      const config = await core.ConfigAggregator.create();
+      await config.reload();
+      const isDefault = (username, key) => {
+        const value = config.getPropertyValue(key);
+        return value === username || state.aliases.getAll(username).includes(value);
+      };
+      let authorizations;
+      try { authorizations = await core.AuthInfo.listAllAuthorizations() ?? []; }
+      catch (error) {
+        if (error.name !== "NoAuthInfoFound") throw error;
+        authorizations = [];
+      }
+      const entries = await Promise.all(authorizations.map(async ({ username }) => {
+        try {
+          const auth = await core.AuthInfo.create({ username });
+          let fields;
+          try { fields = auth.getFields(true); } catch { fields = auth.getFields(); }
+          const defaultOrg = isDefault(username, "target-org");
+          if (fields.orgId && !defaultOrg) {
+            let primary;
+            try { primary = JSON.parse(readFileSync(join(home, ".sfdx", `${fields.orgId}.json`), "utf8")).usernames?.[0]; }
+            catch (error) { if (error.code !== "ENOENT") throw error; }
+            if (primary && primary !== username) return undefined;
+          }
+          const scratch = Boolean(fields.expirationDate || fields.devHubUsername);
+          const org = {
+            alias: state.aliases.getAll(username)[0] ?? null, username,
+            orgId: fields.orgId, instanceUrl: fields.instanceUrl,
+            type: scratch ? "Scratch" : fields.isDevHub ? "DevHub" : fields.isSandbox ? "Sandbox" : "Org",
+            isDefault: defaultOrg, isDefaultDevHub: isDefault(username, "target-dev-hub")
+          };
+          if (scratch) {
+            if (fields.expirationDate) org.expirationDate = fields.expirationDate;
+            org.expired = Boolean(fields.expirationDate && fields.expirationDate.slice(0, 10) < new Date().toISOString().slice(0, 10));
+          }
+          return { org, devHubUsername: fields.devHubUsername };
+        } catch {
+          // Never log auth fields or vendor error messages, which can contain secrets.
+          console.warn("sfd org list: skipping unreadable local authorization");
+          return undefined;
+        }
+      }));
+      const readable = entries.filter(Boolean);
+      if (status) {
+        const hubs = new Map();
+        const checks = readable.filter(({ org }) => org.type !== "Scratch").map(async ({ org }) => {
+          try {
+            await withDeadline(async () => (await getOrg(org.username)).refreshAuth());
+            org.status = "Connected";
+          } catch (error) {
+            orgs.delete(org.username);
+            org.status = error.name;
+          }
+        });
+        for (const entry of readable) {
+          if (entry.org.type !== "Scratch" || !entry.devHubUsername || !entry.org.orgId) continue;
+          if (!hubs.has(entry.devHubUsername)) hubs.set(entry.devHubUsername, []);
+          hubs.get(entry.devHubUsername).push(entry.org);
+        }
+        await Promise.all([...checks, ...[...hubs].map(async ([hub, scratchOrgs]) => {
+          try {
+            const result = await withDeadline(async () => {
+              const org = await getOrg(hub);
+              return org.getConnection().query(`SELECT ScratchOrg, Status, ExpirationDate FROM ScratchOrgInfo WHERE ScratchOrg IN (${scratchOrgs.map(o => soqlString(o.orgId.slice(0, 15))).join(",")})`);
+            });
+            for (const org of scratchOrgs) {
+              const row = result.records.find(r => r.ScratchOrg?.slice(0, 15) === org.orgId.slice(0, 15));
+              if (!row) continue;
+              org.status = row.Status;
+              if (row.ExpirationDate) org.expirationDate = row.ExpirationDate;
+              org.expired = row.Status === "Expired" || row.Status === "Deleted";
+            }
+          } catch { /* Local scratch details remain useful when a Dev Hub is unavailable. */ }
+        })]);
+      }
+      const listed = readable.map(entry => entry.org);
+      const visible = all ? listed : listed.filter(org => !org.expired);
+      visible.sort((a, b) => (a.alias ?? "").localeCompare(b.alias ?? "") || a.username.localeCompare(b.username));
+      return { orgs: visible, hiddenExpired: listed.length - visible.length };
+    },
+
+    query: ({ org, q, tooling, all, raw, limit }) => withConn(org, async conn => {
       const api = tooling ? conn.tooling : conn;
       const result = await api.query(q, { scanAll: Boolean(all) });
-      while (!result.done) {
+      while (!result.done && (limit === undefined || result.records.length < limit)) {
         if (!result.nextRecordsUrl) throw new Error("Incomplete query result: missing nextRecordsUrl.");
         const page = await api.queryMore(result.nextRecordsUrl);
         result.records.push(...page.records);
         result.done = page.done;
         result.nextRecordsUrl = page.nextRecordsUrl;
       }
-      return raw ? result : compactQuery(result);
+      const truncated = limit !== undefined && (!result.done || result.records.length > limit);
+      if (truncated) result.records = result.records.slice(0, limit);
+      const output = raw ? result : compactQuery(result);
+      if (truncated) output.truncated = true;
+      return output;
     }),
 
     apex: ({ org, body }) => withConn(org, conn => new (apex().ExecuteService)(conn).executeAnonymous({ apexCode: body })),
@@ -181,6 +323,37 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
     describe: ({ org, sobject, tooling, raw }) => withConn(org, async conn => {
       const d = await (tooling ? conn.tooling : conn).describe(sobject);
       return raw ? d : compactDescribe(d);
+    }),
+
+    listMetadataTypes: ({ org }) => withConn(org, conn => metadataTypes(org, conn)),
+
+    listMetadata: ({ org, types = [], folder }) => withConn(org, async conn => {
+      types = [...new Set(types)];
+      if (!types.length) throw new UsageError("list-metadata needs -m <Type>.");
+      if (folder !== undefined && types.length > 1) throw new UsageError("--folder requires exactly one metadata type.");
+      const description = await metadataTypes(org, conn);
+      const known = new Set(description.types.flatMap(t => [t.name, ...t.children]));
+      const groups = types.map(type => {
+        if (!known.has(type)) {
+          const suggestion = metadataSuggestion(type, [...known].sort());
+          throw new UsageError(`Unknown metadata type: ${type}.${suggestion ? ` Did you mean ${suggestion}?` : ""}`);
+        }
+        const folders = folder === undefined && Boolean(description.types.find(t => t.name === type)?.inFolder);
+        const folderType = known.has(`${type}Folder`) ? `${type}Folder` : type === "EmailTemplate" ? "EmailFolder" : `${type}Folder`;
+        return { type, ...(folders ? { folders: true, folderType } : {}), members: [] };
+      });
+      const queries = groups.map(group => ({ type: group.folderType ?? group.type, ...(folder !== undefined ? { folder } : {}) }));
+      const chunks = [];
+      for (let i = 0; i < queries.length; i += 3) chunks.push(queries.slice(i, i + 3));
+      const results = await Promise.all(chunks.map(chunk => conn.metadata.list(chunk, description.apiVersion)));
+      const members = results.flatMap(asArray);
+      for (const group of groups) {
+        group.members = members.filter(member => member.type === (group.folderType ?? group.type)).map(member => ({
+          fullName: member.fullName, lastModifiedDate: member.lastModifiedDate, lastModifiedByName: member.lastModifiedByName,
+          namespacePrefix: member.namespacePrefix, manageableState: member.manageableState
+        })).sort((a, b) => a.fullName.localeCompare(b.fullName));
+      }
+      return { groups };
     }),
 
     deploy: ({ org, projectDir, sourcePaths, metadata, checkOnly, testLevel, tests, waitMinutes = 33 }) =>

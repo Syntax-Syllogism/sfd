@@ -24,9 +24,11 @@ sfd query "SELECT Id, Name FROM Account LIMIT 5" -o my-org
 
 | Command | Does | `sf` equivalent |
 | --- | --- | --- |
-| `sfd query "<soql>"` | SOQL, all pages, `attributes` stripped. `--tooling`, `--all`, `--raw` for the unstripped result | `sf data query` |
+| `sfd query "<soql>"` | SOQL, all pages by default, `attributes` stripped. `--limit <n>` caps rows; `--csv` prints CSV. `--tooling`, `--all`, `--raw` for the unstripped result | `sf data query` |
 | `sfd apex [file]` | Anonymous Apex from a file, `-f`, or stdin. Prints `USER_DEBUG` and fatal lines; `--log` for the full log | `sf apex run` |
 | `sfd rest <path>` | REST call. `-X <method>`, `--body <json\|@file>` | `sf api request rest` |
+| `sfd list-metadata-types` | Supported metadata types, folder markers and child types; cached per org and API version | `sf org list metadata-types` |
+| `sfd list-metadata -m <Type>[,<Type>…]` | Live member names; `--details` for audit fields, `--folder <name>` for folder contents | `sf org list metadata` |
 | `sfd describe <sobject>` | Compact describe; `--raw` for the full one. `--tooling` | `sf sobject describe` |
 | `sfd deploy -d <path> \| -m <Type[:Name]>` | Deploy source. `--check-only`, `-l <level>`, `-t <test>`, `-w <minutes>` | `sf project deploy start` |
 | `sfd retrieve [-d <path> \| -m <Type[:Name]> \| -x <package.xml>]` | Retrieve source; no selector pulls tracked remote changes. `--ignore-conflicts`, `-w <minutes>` | `sf project retrieve start` |
@@ -34,14 +36,63 @@ sfd query "SELECT Id, Name FROM Account LIMIT 5" -o my-org
 | `sfd test` | Run Apex tests. `-n <class>`, `-t <Class.method>`, `-s <suite>`, `-l <level>`, `-c` (coverage), `-w <minutes>`, `--logs` | `sf apex run test --wait` |
 | `sfd logs [--count 10] [--user <username>]` | Recent debug logs, one line each; `--limit` aliases `--count` | `sf apex list log` |
 | `sfd logs get <id\|latest>` | Debug, exception, validation, Flow error and high limit usage lines. `--full` prints raw text | `sf apex get log` |
+| `sfd org list [--all] [--status]` | Local authenticated orgs; `--all` includes expired scratch orgs, `--status` adds live checks | `sf org list --skip-connection-status` |
 | `sfd org` | Resolved username, org id, instance URL and API version | `sf org display` |
 | `sfd hook <agent>`, `check`, `install`, `uninstall` | Agent integration: rewrite `sf` commands before an agent runs them. See [docs/agent-hooks.md](docs/agent-hooks.md) | |
+| `sfd agents-snippet [--write [file]]` | Print agent instructions, or write them into `AGENTS.md` or `CLAUDE.md`. See [Using sfd with coding agents](#using-sfd-with-coding-agents) | |
+| `sfd discover [--since 30d]` | Report missed sfd opportunities and adoption from local agent transcripts. See [docs/discover.md](docs/discover.md) | |
 | `sfd start \| stop \| status \| reload` | Daemon lifecycle; `reload` drops cached orgs and auth state | |
 
+For agents, `--csv --limit 200` is the cheapest way to read rows. The limit,
+CSV layout, output by flag and truncation trailer are described in
+[docs/query.md](docs/query.md).
+
 `-d`, `-m`, `-n`, `-t` and `-s` repeat or take comma-separated lists. The org
-commands take `-o <alias>`, and `--json` prints the raw daemon response. Without `-o`
+commands take `-o <alias>` (except `org list`), and `--json` prints the raw daemon response. Without `-o`
 the org resolves like `sf`: `SF_TARGET_ORG`, then the nearest
 `.sf/config.json`, then the global config.
+
+`sfd list-metadata-types` sorts supported types, marks folder-based types with
+`(folder)` and shows up to six child names. Its daemon cache is scoped to the org
+and connection API version, and cleared by `sfd reload`, auth changes or session
+reconnection. `--json` includes `result.cached` and `result.apiVersion`.
+
+`sfd list-metadata -m Flow,Layout` lists sorted names grouped by requested type.
+Repeat `-m` to add types. `--details` adds the modification date, modifying user,
+namespace and manageable state, omitting empty fields. Member lists are always
+live; empty groups print `(none)`. Unknown types exit 2 with a suggestion when
+available. Listings have the coverage and limits of the Metadata API
+`listMetadata` operation; they do not enumerate special cases separately.
+
+For folder-based types, omitting `--folder` lists folders with a hint. Choose a
+folder to list its members; `--folder` accepts exactly one metadata type:
+
+```bash
+sfd list-metadata -m Report
+sfd list-metadata -m Report --folder Public_Reports
+sfd list-metadata -m ApexClass --details
+```
+
+`sfd org list` reads local auth without network calls. It shows aliases, usernames,
+`*` for the default org, `H` for the default Dev Hub, org types and scratch expiry.
+Expired scratch orgs are hidden with a count hint; use `--all` to include them.
+`--status` checks non-scratch connections in parallel with a 10-second deadline
+per org, and queries scratch status once per Dev Hub (also bounded to 10 seconds).
+Unavailable Dev Hubs leave scratch status blank. New logins and logouts are picked
+up automatically. This command rejects `-o`.
+
+```bash
+sfd org list
+sfd org list --all --status
+sfd org list --json
+```
+
+For `org list`, `--json` returns `{ "orgs": [...] }` directly, with alias,
+username, orgId, instanceUrl, type, isDefault, isDefaultDevHub, and optional
+expirationDate, expired and status. The command never includes access tokens,
+refresh tokens or client secrets in any output, including `--json`. Primary-user
+filtering, status checks and the JSON allowlist are described in
+[docs/org-list.md](docs/org-list.md).
 
 Exit codes: `0` success, `1` the operation failed (including a compile error,
 a failed deploy, or a failing test), `2` usage error, `3` the daemon could
@@ -81,8 +132,9 @@ it down even if its protocol differs.
 
 ## Behavior notes
 
-- Queries fetch every page without a record cap. Compact results preserve
-  `done` and any continuation URL supplied by Salesforce.
+- Queries fetch every page unless `--limit` is given. Compact results preserve
+  `done` and any continuation URL supplied by Salesforce; see
+  [docs/query.md](docs/query.md) for the limit rules.
 - Deploys, retrieves and `tracking` share one queue per daemon, so they run
   one at a time. Deploys reload `sfdx-project.json` on every call.
 - Retrieve conflicts, changes-only retrieves, and how `tracking` and deploys
@@ -158,6 +210,46 @@ sfd hook install --agent gemini
 ```
 
 Add `--project` to install into the current project instead. Preview a rewrite
-with `sfd hook check '<sf command>'`. The supported commands, adapter details,
-skip rules and the `SFD_HOOK_DISABLE=1` switch are in
+with `sfd hook check '<sf command>'`. Query result format `-r csv` (or
+`--result-format csv`) maps to `sfd query --csv`. The supported commands,
+adapter details, skip rules and the `SFD_HOOK_DISABLE=1` switch are in
 [docs/agent-hooks.md](docs/agent-hooks.md).
+
+## Using sfd with coding agents
+
+`sfd discover` scans local Claude Code, Codex CLI and Gemini CLI transcripts for
+shell tool calls using `sf`, legacy `sfdx`, or `sfd`. It uses the hook's rewrite
+engine to report rewritable calls, skip reasons, unsupported commands and adoption.
+It reads local files only, without an org, daemon, network calls or writes.
+
+```bash
+sfd discover
+sfd discover --since 12h --agent claude --agent codex --project /path/to/project
+sfd discover --top 5 --json
+```
+
+`--since` takes days (`d`) or hours (`h`), default `30d`. `--agent` is repeatable,
+and all three agents are scanned by default. Time and output-token savings are
+estimates from observed timings and output sizes; they are never extrapolated.
+The stores read, how each call is classified, the JSON shape and the limits are
+described in [docs/discover.md](docs/discover.md).
+
+The agent reference includes metadata type discovery and member listing alongside
+query, source and log operations. Print a compact command reference with
+`sfd agents-snippet`, or add it to your project's agent instructions:
+
+```bash
+sfd agents-snippet --write
+sfd agents-snippet --write docs/CLAUDE.md
+```
+
+`--write` uses the first existing `AGENTS.md` or `CLAUDE.md` in the Salesforce
+project root (or the current directory outside a project), creating `AGENTS.md`
+if neither exists. Explicit paths resolve from the current directory. Only the
+block between `<!-- sfd:start -->` and `<!-- sfd:end -->` is replaced on later
+runs; other instructions are preserved. This command needs no org or daemon.
+The block's contents and marker rules are described in
+[docs/agents-snippet.md](docs/agents-snippet.md).
+
+For automatic command rewriting, install a hook with
+`sfd hook install --agent <agent>` (see [Agent integration](#agent-integration)).

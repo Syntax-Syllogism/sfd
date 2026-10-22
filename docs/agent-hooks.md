@@ -67,7 +67,7 @@ for a skip, printing the skip reason. It never contacts the daemon.
 
 | `sf` command | `sfd` command | Notes |
 | --- | --- | --- |
-| `data query` | `query` | `-q` / `--query` is required. `-t` / `--use-tooling-api` becomes `--tooling`; `--all-rows` becomes `--all`. `-r human` and `-r json` are accepted and dropped. |
+| `data query` | `query` | `-q` / `--query` is required. `-t` / `--use-tooling-api` becomes `--tooling`; `--all-rows` becomes `--all`. `-r csv` / `--result-format csv` becomes `--csv`; `-r human` and `-r json` are accepted and dropped. |
 | `apex run test` | `test` | Needs a positive `-w` / `--wait`, or `--synchronous`. `-n`, `-t`, `-s`, `-l`, `-c` and `-w` map directly. `--synchronous` is dropped, because `sfd test` always waits for the run. |
 | `apex list log` | `logs` | Lists recent logs; automatic TraceFlag setup applies. |
 | `apex get log` | `logs get` | `-i` / `--log-id` or `-n` / `--number 1` required. Output directory options stay with `sf`. Filtered output. |
@@ -76,9 +76,13 @@ for a skip, printing the skip reason. It never contacts the daemon.
 | `project retrieve start` | `retrieve` | `-d`, `-m`, `-x` / `--manifest`, `-w` and `-c` / `--ignore-conflicts` map directly. No selector pulls remote changes. Selectors are mutually exclusive. |
 | `sobject describe` | `describe` | `-s` is required. `-t` becomes `--tooling`. |
 | `api request rest` | `rest` | Exactly one path. `-X` and `--body` map directly. A body needs an explicit method other than GET, because `sf` ignores bodies with GET while `sfd` infers POST from a body. |
+| `org list metadata-types` | `list-metadata-types` | `-o` supported; API-version and output-file flags stay with `sf`. |
+| `org list metadata` | `list-metadata` | `-m` / `--metadata-type` required; `--folder` supported. API-version and output-file flags stay with `sf`. |
+| `org list` | `org list --status` | `--skip-connection-status` omits `--status`; `--all` and `--json` carry through. `--clean`, `--verbose`, `-p` and `--no-prompt` stay on `sf`. No target-org flag. |
 | `org display` | `org` | `-o` and `--json` only. |
 
-Every mapped command keeps `-o <alias>`. The `--json` flag is dropped, which
+Mapped commands except `org list` keep `-o <alias>`. The `--json` flag is dropped
+except for `org list`, which returns its compact public fields as JSON. Dropping it
 means the rewritten command prints sfd's compact output, not sf's JSON
 envelope. `SF_TARGET_ORG=<alias>` as a leading env assignment is kept in front
 of the rewritten command.
@@ -107,7 +111,8 @@ The rewriter skips these, and the agent runs the original command:
   literal delimiter.
 - Flags not in the table (for example test report output options), duplicate
   flags, missing values, and values that start with `-`.
-- Non-human, non-JSON result formats, and `--verbose` on `org display`.
+- Result formats other than `human` or `json` (also `csv` for queries), and
+  `--verbose` on `org display`.
 
 ## Extending the rewriter
 
@@ -115,10 +120,16 @@ The rewriter skips these, and the agent runs the original command:
    command words, the `sfd` subcommand, and a flag table. Each flag is
    `[sf names, sfd flag or "" to drop, takes a value, repeatable]`. Flags not
    in the table are skipped. Required-flag and value checks live in `mapArgs`.
-2. If the `sfd` subcommand is new, add it to `bin/sfd.mjs` first (`options`,
-   the request switch and `USAGE`).
+2. If the `sfd` subcommand is new, add it to `bin/sfd.mjs` first (`options`
+   and the request switch). Then add its entry to `COMMANDS` in
+   `src/commands.mjs`, which generates its `--help` line and its agent snippet
+   line.
 3. Add rewrite cases to `test/rewrite.test.mjs`. Add adapter cases to
    `test/hooks.test.mjs` if the response shape changes.
 4. Update the table above and the command table in the [README](../README.md).
+
+`sfd discover` also calls `rewrite()` and `lex()` to classify commands from
+local transcripts. A rule change therefore moves its rewritable and skipped
+counts. See [discover.md](discover.md).
 
 Run `npm test` before committing.

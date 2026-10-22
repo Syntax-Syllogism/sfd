@@ -26,6 +26,8 @@ test("auto-starts the daemon and runs a query against the resolved org", () => {
   const r = sfd(["query", "SELECT Id FROM Account"]);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout).records, [{ org: "stub-org", q: "SELECT Id FROM Account" }]);
+  assert.equal(r.stdout, JSON.stringify({ totalSize: 1, done: true, records: [{ org: "stub-org", q: "SELECT Id FROM Account" }] }, null, 2) + "\n");
+  assert.equal(r.stderr, "");
   assert.match(sfd(["status"]).stdout, /running/);
 });
 
@@ -149,5 +151,74 @@ test("TraceFlag notices survive a subsequent log error in text and JSON", () => 
     assert.match(result.stderr, /enabled debug logging for agent/);
     if (flags.length) assert.equal(JSON.parse(result.stdout).trace.id, "7tf");
     else assert.match(result.stderr, /No debug logs found/);
+  }
+});
+
+
+test("query CSV and truncation trailers respect stdout, stderr and JSON modes", () => {
+  const trailer = "… 5,011 more rows not shown (totalSize 5,012); raise --limit or narrow the query\n";
+  const csv = sfd(["query", "rows", "--csv", "--limit", "1"]);
+  assert.equal(csv.status, 0, csv.stderr);
+  assert.equal(csv.stdout, "Name,Owner.Name\nA,User\n");
+  assert.equal(csv.stderr, trailer);
+  const uncapped = sfd(["query", "rows", "--csv"]);
+  assert.equal(uncapped.status, 0, uncapped.stderr);
+  assert.equal(uncapped.stdout, "Name,Owner.Name\nA,User\nB,\n");
+  assert.equal(uncapped.stderr, "");
+  const text = sfd(["query", "rows", "--limit", "1"]);
+  assert.equal(text.status, 0, text.stderr);
+  assert.ok(text.stdout.endsWith("\n" + trailer));
+  assert.equal(JSON.parse(text.stdout.slice(0, -trailer.length)).records.length, 1);
+  assert.equal(text.stderr, "");
+  const json = sfd(["query", "rows", "--limit", "1", "--csv", "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).result.truncated, true);
+  assert.equal(JSON.parse(json.stdout).result.records.length, 1);
+  assert.equal(json.stderr, "");
+  const empty = sfd(["query", "empty", "--csv"]);
+  assert.equal(empty.status, 0, empty.stderr);
+  assert.equal(empty.stdout, "");
+  for (const limit of ["0", "abc", "-1", "1.5", "Infinity", "9007199254740992"]) {
+    const result = sfd(["query", "rows", `--limit=${limit}`]);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /--limit must be a positive integer/);
+    assert.equal(result.stdout, "");
+  }
+});
+
+test("org list dispatches without a target org, renders text and returns the public JSON shape", () => {
+  const list = sfd(["org", "list"]);
+  assert.equal(list.status, 0, list.stderr);
+  assert.match(list.stdout, /\*  dev user Org/);
+  const json = sfd(["org", "list", "--all", "--status", "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  assert.deepEqual(JSON.parse(json.stdout), { orgs: [{ alias: "all", username: "user", type: "Org", isDefault: true, status: "Connected" }] });
+  for (const args of [["-o", "x"], ["extra"]]) assert.equal(sfd(["org", "list", ...args]).status, 2);
+  const display = sfd(["org", "-o", "other", "--json"]);
+  assert.equal(display.status, 0, display.stderr);
+  assert.equal(JSON.parse(display.stdout).result.alias, "other");
+});
+
+test("metadata CLI renders types, members and details and passes selectors", () => {
+  const types = sfd(["list-metadata-types"]);
+  assert.equal(types.status, 0, types.stderr);
+  assert.equal(types.stdout, "1 metadata types (API v67.0)\nApexClass\n");
+  assert.equal(JSON.parse(sfd(["list-metadata-types", "--json"]).stdout).result.cached, true);
+  assert.equal(sfd(["list-metadata", "-m", "Flow"]).stdout, "Name\n");
+  assert.equal(sfd(["list-metadata", "-m", "Flow", "--details"]).stdout, "Name  unmanaged\n");
+  const multiple = sfd(["list-metadata", "-m", "Flow,Layout", "-m", "ApexClass", "-o", "other", "--json"]);
+  assert.equal(multiple.status, 0, multiple.stderr);
+  assert.deepEqual(JSON.parse(multiple.stdout).result.types, ["Flow", "Layout", "ApexClass"]);
+  assert.equal(JSON.parse(multiple.stdout).result.org, "other");
+  const folder = sfd(["list-metadata", "-m", "Report", "--folder", "Public"]);
+  assert.equal(folder.status, 0, folder.stderr);
+  assert.equal(folder.stdout, "Public/Name\n");
+  for (const args of [["list-metadata"], ["list-metadata", "-m", ","], ["list-metadata", "-m", "Report,Dashboard", "--folder", "x"]]) {
+    assert.equal(sfd(args).status, 2);
+  }
+  for (const json of [[], ["--json"]]) {
+    const bad = sfd(["list-metadata", "-m", "ApexClas", ...json]);
+    assert.equal(bad.status, 2);
+    assert.match(json.length ? bad.stdout : bad.stderr, /Did you mean ApexClass/);
   }
 });

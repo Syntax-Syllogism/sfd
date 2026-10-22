@@ -3,7 +3,7 @@ import test from "node:test";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import {
-  filterLog, formatLog, formatLogList, compactDescribe, compactQuery, formatApex, formatDeploy, formatTests, stripAttributes, summarizeDeploy, summarizeTests, summarizeRetrieve, formatRetrieve, formatTracking
+  formatMetadataTypes, formatMetadataList, flattenRecord, toCsv, filterLog, formatLog, formatLogList, compactDescribe, compactQuery, formatApex, formatDeploy, formatTests, stripAttributes, summarizeDeploy, summarizeTests, summarizeRetrieve, formatRetrieve, formatTracking
 } from "../src/format.mjs";
 
 test("compactQuery strips attributes at every depth", () => {
@@ -162,4 +162,58 @@ test("Flow limit summaries are omitted rather than presented as Flow errors", ()
     "x|FLOW_ELEMENT_ERROR|bad flow|UpdateRecords"
   ].join("\n");
   assert.deepEqual(filterLog(body), ["FLOW bad flow UpdateRecords"]);
+});
+
+
+test("CSV flattens relationships, child subqueries and aggregate fields", () => {
+  const record = { Owner: { Manager: { Name: "Boss" } }, Parent: null, expr0: 2,
+    Contacts: { records: [{ attributes: { type: "Contact" }, Name: "Kid" }] } };
+  assert.deepEqual(flattenRecord(record), { "Owner.Manager.Name": "Boss", Parent: null, expr0: 2, Contacts: '[{"Name":"Kid"}]' });
+  assert.equal(toCsv([{ Owner: null, c: 2 }, { Owner: { Manager: { Name: "Boss" } }, extra: true }]),
+    "c,Owner.Manager.Name,extra\n2,,\n,Boss,true");
+  assert.equal(toCsv([{ Contacts: record.Contacts }]), 'Contacts\n"[{""Name"":""Kid""}]"');
+  assert.equal(toCsv([{ Owner: null }]), "Owner\n");
+  assert.equal(toCsv([]), "");
+});
+
+test("CSV quotes headers and cells and keeps first-seen columns and primitive values", () => {
+  assert.equal(toCsv([{ 'a,b': 'say "hi"', line: "a\nb", cr: "a\rb", count: 0, flag: false, empty: undefined }, { later: 3 }]),
+    '"a,b",line,cr,count,flag,empty,later\n"say ""hi""","a\nb","a\rb",0,false,,\n,,,,,,3');
+});
+
+test("org list formats markers, types, expiry, hidden counts and optional status", async () => {
+  const { formatOrgList } = await import("../src/format.mjs");
+  const rows = [
+    { alias: "hub", username: "a", type: "DevHub", isDefault: true, isDefaultDevHub: true, status: "Connected" },
+    { alias: null, username: "long-user", type: "Sandbox" },
+    { alias: "scratch", username: "b", type: "Scratch", expirationDate: "2099-01-02" },
+    { alias: "old", username: "c", type: "Scratch", expired: true },
+    { alias: "prod", username: "d", type: "Org" }
+  ];
+  assert.equal(formatOrgList({ orgs: rows, hiddenExpired: 2 }), [
+    "*H hub     a         DevHub Connected",
+    "   -       long-user Sandbox",
+    "   scratch b         Scratch expires 2099-01-02",
+    "   old     c         Scratch EXPIRED",
+    "   prod    d         Org",
+    "(2 expired scratch org(s) hidden; use --all)"
+  ].join("\n"));
+  assert.equal(formatOrgList({ orgs: [] }), "No authenticated orgs. Run: sf org login web -a <alias>");
+  assert.equal(formatOrgList({ orgs: [], hiddenExpired: 1 }), "(1 expired scratch org(s) hidden; use --all)");
+});
+
+test("metadata type formatter caps children and marks folder types", () => {
+  assert.equal(formatMetadataTypes({ apiVersion: "67.0", types: [
+    { name: "CustomObject", children: ["A", "B", "C", "D", "E", "F", "G", "H"] },
+    { name: "Report", inFolder: true, children: [] }
+  ] }), "2 metadata types (API v67.0)\nCustomObject [A, B, C, D, E, F, …+2]\nReport (folder)");
+});
+
+test("metadata member formatter renders names, groups, folders, empty lists and details", () => {
+  const group = { type: "Flow", members: [{ fullName: "A" }, { fullName: "B" }] };
+  assert.equal(formatMetadataList({ groups: [group] }), "A\nB");
+  assert.equal(formatMetadataList({ groups: [group, { type: "Layout", members: [] }] }), "Flow (2):\n  A\n  B\nLayout (0):\n  (none)");
+  assert.equal(formatMetadataList({ groups: [{ type: "Flow", members: [] }] }), "(none)");
+  assert.equal(formatMetadataList({ groups: [{ ...group, folders: true, folderType: "ReportFolder" }] }), "ReportFolder (2): use --folder <name> to list members\n  A\n  B");
+  assert.equal(formatMetadataList({ groups: [{ ...group, members: [{ fullName: "A", lastModifiedDate: "2026-10-01T12:00:00Z", lastModifiedByName: "J. Smith", namespacePrefix: "abc", manageableState: "unmanaged" }, { fullName: "B" }] }] }, { details: true }), "A  2026-10-01  J. Smith  ns:abc  unmanaged\nB");
 });

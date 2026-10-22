@@ -4,9 +4,14 @@ import { spawnSync } from "node:child_process";
 import { rewrite } from "../src/rewrite.mjs";
 
 const rewrites = [
+  ["sf org list metadata-types -o dev --json", "sfd list-metadata-types -o 'dev'"],
+  ["sf org list metadata -m Report --folder Public -o dev", "sfd list-metadata -m 'Report' --folder 'Public' -o 'dev'"],
+  ["sf org list metadata --metadata-type=ApexClass --json", "sfd list-metadata -m 'ApexClass'"],
   ['sf data query -q "SELECT Id FROM Account" -o dev --json', "sfd query 'SELECT Id FROM Account' -o 'dev'"],
   ["sf data query --query='SELECT Id' --target-org=x -t --all-rows -r json", "sfd query 'SELECT Id' -o 'x' --tooling --all"],
   ["sf data query -q 'SELECT Id' --result-format human", "sfd query 'SELECT Id'"],
+  ["sf data query -q 'SELECT Id' -r csv", "sfd query 'SELECT Id' --csv"],
+  ["sf data query --query='SELECT Id' --result-format=csv -o dev -t --all-rows --json", "sfd query 'SELECT Id' --csv -o 'dev' --tooling --all"],
   ['sf data query -q "SELECT Id WHERE Name = \'a|b>;c\'"', "sfd query 'SELECT Id WHERE Name = '\\''a|b>;c'\\'''"],
   ["sf apex run -f code.apex --json", "sfd apex -f 'code.apex'"],
   ["sf apex run --file=x.apex -o dev", "sfd apex -f 'x.apex' -o 'dev'"],
@@ -47,6 +52,8 @@ for (const [input, expected] of rewrites) {
 }
 
 const skips = [
+  ["sf org list metadata", "needs metadata-type"],
+  ...["metadata", "metadata-types"].flatMap(command => ["--api-version 67.0", "-f out.json", "--output-file out.json"].map(flag => [`sf org list ${command} ${flag}`, "unsupported flag"])),
   ['sf data query -q "SELECT Id" --json | jq .', 'piped'],
   ["sf org display > out", 'redirection'], ["sf org display >> out", 'redirection'],
   ["sf org display | tee out", 'piped'], ["sf org display | sf apex run", 'piped'],
@@ -58,20 +65,22 @@ const skips = [
   ["SF_X=1 sf org display", 'plain sf'], ["env SF_TARGET_ORG=x sf org display", 'plain sf'],
   ["sfd org", 'plain sf'], ["sf data query -q q --api-version 67", 'unsupported flag'],
   ["sf data query -q q -f q.txt", 'unsupported flag'], ["sf data query -q q --bulk", 'unsupported flag'],
-  ["sf data query -q q -r csv", 'result format'], ["sf data query -q q -w 5", 'unsupported flag'],
+  ["sf data query -q q -r xml", 'result format'], ["sf data query -q q -w 5", 'unsupported flag'],
+  ["sf data query -q q -r csv --result-format json", 'duplicate'],
   ["sf data query --query", 'missing value'], ["sf data query -q q --json=true", 'boolean'],
   ["sf data query -q q -q other", 'duplicate'], ["sf data query", 'required'],
   ["sf project deploy start --json", 'needs source-dir'],
   ...['-x manifest.xml', '--metadata-dir dir', '--async', '--pre-destructive-changes x', '--post-destructive-changes x', '--ignore-conflicts', '--ignore-errors', '--purge-on-delete', '-c', '-g', '--concise', '--verbose'].map(f => [`sf project deploy start -d src ${f}`, 'unsupported flag']),
   ["sf apex run test -n A", 'asynchronous'], ["sf apex run test -w 0", 'positive'],
   ["sf apex run test -y -r junit", 'result format'], ["sf apex run test -y -r tap", 'result format'],
+  ["sf apex run test -y -r csv", 'result format'],
   ["sf apex run test -y -d results", 'unsupported flag'],
   ...['-H Accept:json', '-S out', '-i', '--json'].map(f => [`sf api request rest /x ${f}`, 'unsupported flag']),
   ["sf api request rest /x --body=hello", 'implicit'],
   ["sf api request rest /x -X GET --body=hello", 'explicit GET'],
   ["sf api request rest /x -X post --body=hello", 'method'],
   ["sf api request rest /x --body=-", 'unsupported'],
-  ["sf org display --verbose", 'unsupported flag'], ["sf org list", 'unsupported sf command'],
+  ["sf org display --verbose", 'unsupported flag'], ["sf org list --clean", 'unsupported flag'],
   ["sf org display < file", 'redirection'], ["cat x | sf org display", 'only for apex'],
   ["sf org display &", 'chain'], ["sf apex run <<EOF\nx\nEOF\necho x", 'terminator'],
   ["sf apex run <<EOF\nx\nEOF\nx\nEOF", 'terminator'],
@@ -116,4 +125,12 @@ test("debug log rewrites accept IDs or one latest log and skip file output", () 
   for (const args of ["-n 2", "-i id -n 1", "-n 1 -d logs", "-n 1 --output-dir logs", ""]) {
     assert.ok(rewrite(`sf apex get log ${args}`).skip, args);
   }
+});
+
+test("org list preserves status defaults and supported flags", () => {
+  assert.equal(rewrite("sf org list").command, "sfd org list --status");
+  assert.equal(rewrite("sf org list --skip-connection-status").command, "sfd org list");
+  assert.equal(rewrite("sf org list --all --json").command, "sfd org list --all --json --status");
+  assert.equal(rewrite("sf org list --skip-connection-status --all --json").command, "sfd org list --all --json");
+  for (const flag of ["--clean", "--verbose", "-p", "--no-prompt", "-o dev"]) assert.ok(rewrite(`sf org list ${flag}`).skip);
 });

@@ -1,11 +1,13 @@
 #!/usr/bin/env node
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { call, isRunning, startDaemon, DaemonError, VERSION } from "../src/client.mjs";
 import { findProjectDir, resolveTargetOrg } from "../src/project.mjs";
-import { formatApex, formatLog, formatLogList, formatDeploy, formatTests, formatRetrieve, formatTracking } from "../src/format.mjs";
+import { formatMetadataTypes, formatMetadataList, formatOrgList, formatApex, formatLog, formatLogList, formatDeploy, formatTests, formatRetrieve, formatTracking, toCsv } from "../src/format.mjs";
 import { paths } from "../src/paths.mjs";
+import { commandHelp } from "../src/commands.mjs";
+import { snippet, upsertSnippet } from "../src/snippet.mjs";
 import { UsageError } from "../src/usage-error.mjs";
 
 const USAGE = `sfd ${VERSION}: fast Salesforce CLI operations through a warm local daemon
@@ -13,24 +15,7 @@ const USAGE = `sfd ${VERSION}: fast Salesforce CLI operations through a warm loc
 Usage: sfd <command> [options]
 
 Commands:
-  query <soql>          Run SOQL (all pages). --tooling, --all (include deleted)
-  apex [file]           Run anonymous Apex from a file, -f <file>, or stdin. --log for the full debug log
-  rest <path>           Call a REST path, e.g. /services/data/v67.0/limits. -X <method>, --body <json|@file>
-  describe <sobject>    Compact describe. --tooling, --raw for the full describe
-  deploy                Deploy source. -d <path> (repeatable), -m <Type[:Name]> (repeatable),
-                        --check-only, -l <test level>, -t <test> (repeatable), -w <minutes>
-  retrieve              Retrieve source. -d <path>, -m <Type[:Name]> or -x <package.xml>,
-                        -w <minutes>, --ignore-conflicts. No selector pulls tracked remote changes
-  tracking              Show source-tracked changes. --local | --remote, --conflicts (conflicts only)
-  test                  Run Apex tests. -n <class> (repeatable), -t <Class.method> (repeatable),
-                        -s <suite> (repeatable), -l <test level>, -c (coverage), -w <minutes>, --logs, --no-trace
-  logs                  List recent debug logs. --count/--limit <10>, --user <username>, --no-trace
-  logs get <id|latest>  Print a filtered log. --full for raw text, --no-trace
-  org                   Show the resolved org (username, id, instance, API version)
-  hook <agent|check|install|uninstall>
-                        Integrate with Claude Code, Codex CLI or Gemini CLI
-  start | stop | status | reload
-                        Manage the daemon. reload drops cached orgs and auth state
+${commandHelp()}
 
 Common options:
   -o, --target-org <alias>  Org alias or username (default: sf target-org config)
@@ -41,10 +26,15 @@ Exit codes: 0 success, 1 operation failed, 2 usage error, 3 daemon error.`;
 
 const options = {
   "target-org": { type: "string", short: "o" },
+  write: { type: "boolean" },
   json: { type: "boolean" },
   help: { type: "boolean", short: "h" },
+  folder: { type: "string" },
+  details: { type: "boolean" },
   tooling: { type: "boolean" },
+  status: { type: "boolean" },
   all: { type: "boolean" },
+  csv: { type: "boolean" },
   raw: { type: "boolean" },
   log: { type: "boolean" },
   logs: { type: "boolean" },
@@ -98,6 +88,13 @@ function wait(values) {
   return minutes;
 }
 
+function queryLimit(value) {
+  if (value === undefined) return undefined;
+  const limit = Number(value);
+  if (!Number.isSafeInteger(limit) || limit <= 0) throw new UsageError("--limit must be a positive integer.");
+  return limit;
+}
+
 function print(value) {
   process.stdout.write((typeof value === "string" ? value : JSON.stringify(value, null, 2)) + "\n");
 }
@@ -106,6 +103,19 @@ async function run(argv) {
   if (argv[0] === "hook") {
     const { runHook } = await import("../src/hooks.mjs");
     return runHook(argv.slice(1));
+  }
+  if (argv[0] === "discover") {
+    const { values, positionals } = parseArgs({ args: argv.slice(1), options: {
+      since: { type: "string" }, agent: { type: "string", multiple: true },
+      project: { type: "string" }, top: { type: "string" }, json: { type: "boolean" },
+      help: { type: "boolean", short: "h" }
+    }, allowPositionals: true });
+    if (values.help) { print("sfd discover [--since 30d] [--agent claude|codex|gemini]… [--project <path>] [--top 10] [--json]"); return 0; }
+    if (positionals.length) throw new UsageError("discover does not accept positional arguments.");
+    const { discover, discoverOptions, formatReport } = await import("../src/discover/index.mjs");
+    const report = await discover(discoverOptions(values));
+    print(values.json ? report : formatReport(report));
+    return 0;
   }
   const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
   let [command, ...rest] = positionals;
@@ -118,6 +128,32 @@ async function run(argv) {
     if (!dir) throw new UsageError("No sfdx-project.json found in this directory or its parents.");
     return dir;
   };
+
+  if (command === "agents-snippet") {
+    if (rest.length > 1 || (rest.length && !values.write)) {
+      throw new UsageError("agents-snippet accepts --write [file].");
+    }
+    const block = snippet();
+    if (!values.write) { print(block); return 0; }
+    const root = findProjectDir(cwd) ?? cwd;
+    const file = rest[0] ?? ["AGENTS.md", "CLAUDE.md"].find(name => existsSync(resolve(root, name))) ?? "AGENTS.md";
+    const target = resolve(rest[0] ? cwd : root, file);
+    let original;
+    try { original = readFileSync(target, "utf8"); }
+    catch (e) {
+      if (e.code !== "ENOENT") throw new UsageError(`Cannot read target file ${target}: ${e.message}`);
+    }
+    let updated;
+    try { updated = upsertSnippet(original ?? "", block); }
+    catch (e) { throw new UsageError(`Malformed sfd block in ${file}: ${e.message}`); }
+    if (updated === original) print(`${file} already up to date`);
+    else {
+      try { writeFileSync(target, updated); }
+      catch (e) { throw new UsageError(`Cannot write target file ${target}: ${e.message}`); }
+      print(`${original === undefined ? "Created" : "Updated"} ${file}`);
+    }
+    return 0;
+  }
 
   // Lifecycle commands.
   switch (command) {
@@ -153,7 +189,9 @@ async function run(argv) {
     case "query": {
       const q = rest.join(" ") || readStdin().trim();
       if (!q) throw new UsageError("query needs a SOQL string.");
-      req = { org: org(), q, tooling: values.tooling, all: values.all, raw: values.raw };
+      const limit = queryLimit(values.limit);
+      req = { org: org(), q, tooling: values.tooling, all: values.all, raw: values.raw, limit };
+      if (values.csv) render = result => toCsv(result.records);
       break;
     }
     case "apex": {
@@ -173,6 +211,20 @@ async function run(argv) {
     case "describe": {
       if (!rest[0]) throw new UsageError("describe needs an sObject name.");
       req = { org: org(), sobject: rest[0], tooling: values.tooling, raw: values.raw };
+      break;
+    }
+    case "list-metadata-types":
+      command = "listMetadataTypes";
+      req = { org: org() };
+      render = formatMetadataTypes;
+      break;
+    case "list-metadata": {
+      const types = [...new Set(split(values.metadata) ?? [])];
+      if (!types.length) throw new UsageError("list-metadata needs -m <Type>.");
+      if (values.folder !== undefined && types.length > 1) throw new UsageError("--folder requires exactly one metadata type.");
+      command = "listMetadata";
+      req = { org: org(), types, folder: values.folder };
+      render = result => formatMetadataList(result, { details: values.details });
       break;
     }
     case "deploy": {
@@ -232,7 +284,14 @@ async function run(argv) {
       render = result => formatTests(result, req.org);
       break;
     case "org":
-      req = { org: org() };
+      if (rest[0] === "list") {
+        if (rest.length !== 1 || values["target-org"] !== undefined) throw new UsageError("org list accepts no target org or additional arguments.");
+        command = "orgList";
+        req = { all: values.all, status: values.status };
+        render = formatOrgList;
+      } else {
+        req = { org: org() };
+      }
       break;
     default:
       throw new UsageError(`Unknown command: ${command}. Run sfd --help.`);
@@ -243,12 +302,18 @@ async function run(argv) {
   if (trace) {
     process.stderr.write(`sfd: enabled debug logging for ${trace.username} until ${trace.expires} (TraceFlag ${trace.id})\n`);
   }
-  if (values.json) { print(res); return res.status === 0 ? okStatus(command, res.result) : res.name === "UsageError" ? 2 : 1; }
+  if (values.json) { print(command === "orgList" && res.status === 0 ? { orgs: res.result.orgs } : res); return res.status === 0 ? okStatus(command, res.result) : res.name === "UsageError" ? 2 : 1; }
   if (res.status !== 0) {
     process.stderr.write(`${res.name}: ${res.message}\n`);
     return res.name === "UsageError" ? 2 : 1;
   }
-  print(render(res.result));
+  const output = render(res.result);
+  if (command !== "query" || !values.csv || output) print(output);
+  if (command === "query" && res.result.truncated) {
+    const { totalSize, records } = res.result;
+    const trailer = `… ${(totalSize - records.length).toLocaleString("en-US")} more rows not shown (totalSize ${totalSize.toLocaleString("en-US")}); raise --limit or narrow the query\n`;
+    (values.csv ? process.stderr : process.stdout).write(trailer);
+  }
   return okStatus(command, res.result);
 }
 

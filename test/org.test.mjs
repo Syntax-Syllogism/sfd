@@ -51,3 +51,12 @@ test("enable tracing then fetch latest log after anonymous Apex", { skip: !org &
   assert.equal(latest.status, 0, latest.stderr);
   assert.match(latest.stdout, /sfd debug log check/);
 });
+
+test("metadata listing against a real org", { skip: !org && "set SFD_TEST_ORG to run" }, () => {
+  const types = sfd(["list-metadata-types", "--json"]);
+  assert.equal(types.status, 0, types.stderr);
+  assert.ok(JSON.parse(types.stdout).result.types.some(type => type.name === "ApexClass"));
+  const members = sfd(["list-metadata", "-m", "ApexClass", "--json"]);
+  assert.equal(members.status, 0, members.stderr);
+  assert.ok(JSON.parse(members.stdout).result.groups[0].members.some(member => member.fullName));
+});

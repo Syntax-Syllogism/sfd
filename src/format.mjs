@@ -2,7 +2,7 @@ import { relative, resolve } from "node:path";
 
 // Compact, token-friendly renderings of Salesforce results.
 
-const asArray = x => (x === undefined || x === null ? [] : Array.isArray(x) ? x : [x]);
+export const asArray = x => (x === undefined || x === null ? [] : Array.isArray(x) ? x : [x]);
 
 export function stripAttributes(value) {
   if (Array.isArray(value)) return value.map(stripAttributes);
@@ -16,6 +16,31 @@ export function stripAttributes(value) {
 
 export function compactQuery(result) {
   return { totalSize: result.totalSize, done: result.done, ...(result.nextRecordsUrl ? { nextRecordsUrl: result.nextRecordsUrl } : {}), records: stripAttributes(result.records ?? []) };
+}
+
+export function flattenRecord(record, prefix = "") {
+  const out = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "attributes") continue;
+    const column = prefix + key;
+    if (value === null || typeof value !== "object") out[column] = value;
+    else if (Array.isArray(value.records)) out[column] = JSON.stringify(stripAttributes(value.records));
+    else Object.assign(out, flattenRecord(value, column + "."));
+  }
+  return out;
+}
+
+export function toCsv(records) {
+  if (!records.length) return "";
+  const rows = records.map(record => flattenRecord(record));
+  const keys = [...new Set(rows.flatMap(row => Object.keys(row)))];
+  // A null parent supplies empty cells for its dotted columns, not an extra column.
+  const columns = keys.filter(key => !keys.some(other => other.startsWith(key + ".")) || rows.some(row => row[key] != null));
+  const escape = value => {
+    const text = value == null ? "" : String(value);
+    return /[",\r\n]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text;
+  };
+  return [columns.map(escape).join(","), ...rows.map(row => columns.map(key => escape(row[key])).join(","))].join("\n");
 }
 
 export function compactDescribe(d) {
@@ -238,4 +263,37 @@ export function formatTracking(summary) {
     if (summary[section].length) lines.push(section, ...componentLines(summary[section], section === "conflicts"));
   }
   return lines.join("\n") || "No changes.";
+}
+
+export function formatOrgList({ orgs, hiddenExpired = 0 }) {
+  const aliasWidth = Math.max(1, ...orgs.map(org => (org.alias ?? "-").length));
+  const userWidth = Math.max(1, ...orgs.map(org => org.username.length));
+  const lines = orgs.map(org => {
+    const marker = `${org.isDefault ? "*" : " "}${org.isDefaultDevHub ? "H" : " "}`;
+    const expiry = org.type === "Scratch" ? org.expired ? " EXPIRED" : org.expirationDate ? ` expires ${org.expirationDate.slice(0, 10)}` : "" : "";
+    return `${marker} ${(org.alias ?? "-").padEnd(aliasWidth)} ${org.username.padEnd(userWidth)} ${org.type}${expiry}${org.status ? ` ${org.status}` : ""}`;
+  });
+  if (hiddenExpired) lines.push(`(${hiddenExpired} expired scratch org(s) hidden; use --all)`);
+  if (!lines.length) lines.push("No authenticated orgs. Run: sf org login web -a <alias>");
+  return lines.join("\n");
+}
+
+export function formatMetadataTypes({ types, apiVersion }) {
+  return [`${types.length} metadata types (API v${apiVersion})`, ...types.map(type => {
+    const children = type.children.slice(0, 6);
+    if (type.children.length > 6) children.push(`…+${type.children.length - 6}`);
+    return `${type.name}${type.inFolder ? " (folder)" : ""}${children.length ? ` [${children.join(", ")}]` : ""}`;
+  })].join("\n");
+}
+
+export function formatMetadataList({ groups }, { details = false } = {}) {
+  return groups.map(group => {
+    const header = group.folders
+      ? `${group.folderType} (${group.members.length}): use --folder <name> to list members`
+      : groups.length > 1 ? `${group.type} (${group.members.length}):` : "";
+    const lines = group.members.map(member => details ? [member.fullName, member.lastModifiedDate?.slice(0, 10),
+      member.lastModifiedByName, member.namespacePrefix ? `ns:${member.namespacePrefix}` : "", member.manageableState].filter(Boolean).join("  ") : member.fullName);
+    if (!lines.length) lines.push("(none)");
+    return header ? [header, ...lines.map(line => `  ${line}`)].join("\n") : lines.join("\n");
+  }).join("\n");
 }

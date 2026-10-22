@@ -1,0 +1,38 @@
+{
+  "cwd": "/work/app",
+  "messages": [
+    {
+      "timestamp": "2026-10-21T12:00:00Z",
+      "toolCalls": [
+        {
+          "name": "run_shell_command",
+          "args": {
+            "command": "sf org display"
+          },
+          "result": "abcd"
+        },
+        {
+          "name": "run_shell_command",
+          "args": {
+            "command": "sfd org"
+          }
+        },
+        {
+          "name": "run_shell_command",
+          "args": {
+            "command": "sf org display | head"
+          }
+        },
+        {
+          "name": "read_file",
+          "args": {
+            "path": "sf"
+          }
+        }
+      ]
+    },
+    {
+      "type": "future"
+    }
+  ]
+}

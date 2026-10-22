@@ -56,6 +56,18 @@ for (const [agent, config] of Object.entries(configs)) {
     assert.equal(disabled.stdout, "");
     assert.equal(existsSync(join(dir, "runtime")), false);
   });
+  test(`${agent}: CLI rewrites CSV queries without a daemon`, t => {
+    const dir = temporary(t);
+    const csvInput = { ...input, tool_input: { ...input.tool_input, command: 'sf data query -q "SELECT Id" -r csv' } };
+    const csvExpected = structuredClone(expected);
+    const output = csvExpected.hookSpecificOutput;
+    (output.updatedInput ?? output.tool_input).command = "sfd query 'SELECT Id' --csv";
+    const result = run([agent], JSON.stringify(csvInput), dir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stderr, "");
+    assert.deepEqual(JSON.parse(result.stdout), csvExpected);
+    assert.equal(existsSync(join(dir, "runtime")), false);
+  });
   for (const project of [false, true]) test(`${agent}: ${project ? "project" : "user"} install and uninstall preserve settings`, t => {
     const dir = temporary(t), cwd = join(dir, "project"), home = join(dir, "home");
     mkdirSync(cwd); mkdirSync(home);
