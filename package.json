@@ -1,0 +1,45 @@
+{
+  "name": "@syntax-syllogism/sfd",
+  "version": "0.1.0",
+  "description": "Warm Salesforce CLI daemon: SOQL, anonymous Apex, REST, describe, deploy, and Apex tests without sf startup cost.",
+  "type": "module",
+  "bin": {
+    "sfd": "bin/sfd.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "files": [
+    "bin/sfd.mjs",
+    "src",
+    "CHANGELOG.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "salesforce",
+    "sf",
+    "sfdx",
+    "cli",
+    "daemon",
+    "apex",
+    "soql",
+    "agents"
+  ],
+  "homepage": "https://github.com/Syntax-Syllogism/sfd#readme",
+  "bugs": {
+    "url": "https://github.com/Syntax-Syllogism/sfd/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Syntax-Syllogism/sfd.git"
+  },
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "for f in bin/sfd.mjs src/*.mjs; do node --check \"$f\" || exit 1; done",
+    "test": "node --test test/*.test.mjs"
+  }
+}
