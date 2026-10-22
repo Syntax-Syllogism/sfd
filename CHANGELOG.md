@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-22
+
+### Added
+
+- Agent hook that rewrites supported `sf` commands to their faster `sfd` equivalents
+
 ## [0.1.0] - 2026-10-22
 
 ### Added

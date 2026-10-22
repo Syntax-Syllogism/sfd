@@ -6,6 +6,7 @@ import { call, isRunning, startDaemon, DaemonError, VERSION } from "../src/clien
 import { findProjectDir, resolveTargetOrg } from "../src/project.mjs";
 import { formatApex, formatDeploy, formatTests } from "../src/format.mjs";
 import { paths } from "../src/paths.mjs";
+import { UsageError } from "../src/usage-error.mjs";
 
 const USAGE = `sfd ${VERSION}: fast Salesforce CLI operations through a warm local daemon
 
@@ -21,6 +22,8 @@ Commands:
   test                  Run Apex tests. -n <class> (repeatable), -t <Class.method> (repeatable),
                         -s <suite> (repeatable), -l <test level>, -c (coverage), -w <minutes>
   org                   Show the resolved org (username, id, instance, API version)
+  hook <agent|check|install|uninstall>
+                        Integrate with Claude Code, Codex CLI or Gemini CLI
   start | stop | status | reload
                         Manage the daemon. reload drops cached orgs and auth state
 
@@ -53,8 +56,6 @@ const options = {
   wait: { type: "string", short: "w" }
 };
 
-class UsageError extends Error {}
-
 const split = list => list?.flatMap(v => v.split(",")).map(v => v.trim()).filter(Boolean);
 
 function readStdin() {
@@ -86,6 +87,10 @@ function print(value) {
 }
 
 async function run(argv) {
+  if (argv[0] === "hook") {
+    const { runHook } = await import("../src/hooks.mjs");
+    return runHook(argv.slice(1));
+  }
   const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
   const [command, ...rest] = positionals;
   if (values.help || !command) { print(USAGE); return 0; }

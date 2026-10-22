@@ -31,6 +31,7 @@ sfd query "SELECT Id, Name FROM Account LIMIT 5" -o my-org
 | `sfd deploy -d <path> \| -m <Type[:Name]>` | Deploy source. `--check-only`, `-l <level>`, `-t <test>`, `-w <minutes>` | `sf project deploy start` |
 | `sfd test` | Run Apex tests. `-n <class>`, `-t <Class.method>`, `-s <suite>`, `-l <level>`, `-c` (coverage), `-w <minutes>` | `sf apex run test --wait` |
 | `sfd org` | Resolved username, org id, instance URL and API version | `sf org display` |
+| `sfd hook <agent>`, `check`, `install`, `uninstall` | Agent integration: rewrite `sf` commands before an agent runs them. See [docs/agent-hooks.md](docs/agent-hooks.md) | |
 | `sfd start \| stop \| status \| reload` | Daemon lifecycle; `reload` drops cached orgs and auth state | |
 
 `-d`, `-m`, `-n`, `-t` and `-s` repeat or take comma-separated lists. Every
@@ -100,7 +101,8 @@ it down even if its protocol differs.
 
 `npm test` covers project and org resolution, output formatting, the socket
 protocol (dispatch, version restart, drain, idle, stale socket), and the CLI
-end to end against stub handlers. Injected Salesforce modules cover handler
+end to end against stub handlers, and the agent hook adapters and `sf` rewrite
+rules. Injected Salesforce modules cover handler
 paging, auth refresh, deployment and test orchestration without an org.
 A real-org check is opt-in:
 
@@ -124,3 +126,20 @@ See [SECURITY.md](SECURITY.md) for how to report vulnerabilities.
 ## License
 
 [MIT](LICENSE) © Jacob Richter
+
+## Agent integration
+
+`sfd hook` rewrites supported `sf` shell commands before a coding agent runs
+them, so they reach the warm daemon. Install an adapter for Claude Code, Codex
+CLI or Gemini CLI (user scope by default):
+
+```bash
+sfd hook install --agent claude
+sfd hook install --agent codex
+sfd hook install --agent gemini
+```
+
+Add `--project` to install into the current project instead. Preview a rewrite
+with `sfd hook check '<sf command>'`. The supported commands, adapter details,
+skip rules and the `SFD_HOOK_DISABLE=1` switch are in
+[docs/agent-hooks.md](docs/agent-hooks.md).
