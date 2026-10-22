@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   named pipe, finds `sf` with `where` (including npm `sf.cmd` shims), and
   starts without a console window. CI runs on Windows as well as Linux.
 
+## [0.3.1] - 2026-10-22
+
+### Changed
+
+- Internal maintenance and tooling updates
+
 ## [0.3.0] - 2026-10-22
 
 ### Added

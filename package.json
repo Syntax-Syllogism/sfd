@@ -1,6 +1,6 @@
 {
   "name": "@syntax-syllogism/sfd",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Warm Salesforce CLI daemon: SOQL, anonymous Apex, REST, describe, deploy, and Apex tests without sf startup cost.",
   "type": "module",
   "bin": {

@@ -139,7 +139,7 @@ test("tracking formats empty, changed, deleted and conflicting components", () =
 
 
 test("debug log filtering keeps errors and high limits, dedupes, and leaves Apex unchanged", () => {
-  const body = readFileSync(new URL("./fixtures/sample.log", import.meta.url), "utf8");
+  const body = readFileSync(new URL("./fixtures/sample-debug-log.txt", import.meta.url), "utf8");
   assert.deepEqual(filterLog(body), ["[3] hello", "EXCEPTION [9] System.NullPointerException: boom ×2",
     "FATAL: System.NullPointerException: boom", "VALIDATION", "VALIDATION Bad value", "FLOW bad flow UpdateRecords",
     "LIMIT SOQL 87/100", "LIMIT CPU time 5000/10000"]);

@@ -94,7 +94,7 @@ Anonymous Apex (`sfd apex`) uses a narrower rule in `formatApex`: only
 deduplication and no limit or exception lines. `--log` prints the full log. Keep
 that behavior when changing `filterLog`; `test/format.test.mjs` covers it.
 
-Example, from `test/fixtures/sample.log`:
+Example, from `test/fixtures/sample-debug-log.txt`:
 
 ```text
 Test Failed 12ms 2.0 KB
