@@ -5,8 +5,10 @@ import { existsSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AlreadyRunning, startServer } from "../src/server.mjs";
+import { socketPath as socketFor } from "../src/paths.mjs";
 
-const socketPath = () => join(mkdtempSync(join(tmpdir(), "sfd-srv-")), "s.sock");
+const windows = process.platform === "win32";
+const socketPath = () => socketFor(mkdtempSync(join(tmpdir(), "sfd-srv-")));
 
 function send(socket, req) {
   return new Promise((resolve, reject) => {
@@ -32,7 +34,7 @@ test("dispatches to handlers and reports their errors", async t => {
     boom: async () => { throw Object.assign(new Error("bad"), { name: "BadThing", errorCode: "E1" }); }
   };
   const { socket } = await server(t, { handlers });
-  assert.equal(statSync(socket).mode & 0o777, 0o600);
+  if (!windows) assert.equal(statSync(socket).mode & 0o777, 0o600);
   assert.deepEqual(await send(socket, { op: "echo", v: "1", x: 5 }), { status: 0, result: { got: 5 } });
   assert.deepEqual(await send(socket, { op: "boom", v: "1" }), { status: 1, name: "BadThing", message: "bad", errorCode: "E1" });
   assert.equal((await send(socket, { op: "nope", v: "1" })).name, "UnknownOperation");
@@ -41,7 +43,7 @@ test("dispatches to handlers and reports their errors", async t => {
 test("a version mismatch asks for a restart and drains the server", async t => {
   const { socket, exits } = await server(t);
   assert.deepEqual(await send(socket, { op: "echo", v: "2" }), { restart: true });
-  assert.equal(existsSync(socket), false);
+  if (!windows) assert.equal(existsSync(socket), false);
   assert.deepEqual(exits, ["version"]);
 });
 
@@ -73,6 +75,8 @@ test("idle timeout drains", async t => {
 test("refuses a live socket and replaces a dead one", async t => {
   const { socket } = await server(t);
   await assert.rejects(startServer({ socket, version: "1", handlers: {} }), AlreadyRunning);
+  // Named pipes vanish with their owner, so there is no stale file to replace on Windows.
+  if (windows) return;
 
   const dead = socketPath();
   writeFileSync(dead, "");

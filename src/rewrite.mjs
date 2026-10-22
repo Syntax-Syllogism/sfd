@@ -44,9 +44,12 @@ const wait = ["w wait", "-w", true];
 const level = ["l test-level", "-l", true];
 const tests = ["t tests", "-t", true, true];
 const mappings = [
+  { sf: "apex list log", sfd: "logs", flags: [org, json] },
+  { sf: "apex get log", sfd: "logs get", flags: [org, json, ["i log-id", "", true], ["n number", "", true]] },
   { sf: "data query", sfd: "query", flags: [org, json, tooling, ["q query", "", true], ["all-rows", "--all", false], format], required: "q" },
   { sf: "apex run test", sfd: "test", flags: [org, json, wait, level, tests, format, ["n class-names", "-n", true, true], ["s suite-names", "-s", true, true], ["c code-coverage", "-c", false], ["y synchronous", "", false]] },
   { sf: "apex run", sfd: "apex", flags: [org, json, ["f file", "-f", true]] },
+  { sf: "project retrieve start", sfd: "retrieve", flags: [org, json, wait, ["d source-dir", "-d", true, true], ["m metadata", "-m", true, true], ["x manifest", "-x", true], ["c ignore-conflicts", "--ignore-conflicts", false]] },
   { sf: "project deploy start", sfd: "deploy", flags: [org, json, wait, level, tests, ["d source-dir", "-d", true, true], ["m metadata", "-m", true, true], ["dry-run", "--check-only", false]] },
   { sf: "sobject describe", sfd: "describe", flags: [org, json, tooling, ["s sobject", "", true]], required: "s" },
   { sf: "api request rest", sfd: "rest", flags: [org, ["X method", "-X", true], ["b body", "--body", true]], positional: true },
@@ -88,6 +91,7 @@ function mapArgs(argv) {
   }
   if (mapping.required && !seen.has(mapping.required)) return skip(`missing required ${mapping.required} flag`);
   if (mapping.sfd === "deploy" && !seen.has("d") && !seen.has("m")) return skip("deploy needs source-dir or metadata");
+  if (mapping.sfd === "retrieve" && ["d", "m", "x"].filter(key => seen.has(key)).length > 1) return skip("retrieve selectors are mutually exclusive");
   if (mapping.sfd === "test" && !seen.has("w") && !seen.has("y")) return skip("asynchronous tests need --wait or --synchronous");
   if (mapping.sfd === "rest") {
     const method = seen.get("X")?.[0] ?? "GET";
@@ -96,7 +100,14 @@ function mapArgs(argv) {
     if (seen.has("b") && method === "GET") return skip("REST body with implicit or explicit GET is unsupported");
   }
   if (mapping.positional ? positionals.length !== 1 : positionals.length !== 0) return skip("unsupported positional arguments");
-  const positional = mapping.required ? seen.get(mapping.required) : positionals;
+  let logTarget;
+  if (mapping.sfd === "logs get") {
+    if (seen.has("i") && seen.has("n")) return skip("choose log-id or number");
+    if (seen.has("i")) logTarget = seen.get("i")[0];
+    else if (seen.get("n")?.[0] === "1") logTarget = "latest";
+    else return skip("log get needs log-id or --number 1");
+  }
+  const positional = logTarget ? [logTarget] : mapping.required ? seen.get(mapping.required) : positionals;
   // Protect sfd's own option parser from values that could be interpreted as options.
   if (positional.some(v => v.startsWith("-"))) return skip("unsupported positional value");
   return { command: ["sfd", mapping.sfd, ...positional.map(quote), ...output].join(" "), apex: mapping.sfd === "apex" };

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows: `sfd start` and every other command failed with
+  "process.getuid is not a function". The daemon now listens on a per-user
+  named pipe, finds `sf` with `where` (including npm `sf.cmd` shims), and
+  starts without a console window. CI runs on Windows as well as Linux.
+
+## [0.3.0] - 2026-10-22
+
+### Added
+
+- Added `sfd retrieve` for pulling metadata from an org into the local project
+- Added tracking commands for inspecting changes between local source and the org
+- Added filtered debug log output
+- Added automatic TraceFlag creation when debug logs are requested
+
+### Fixed
+
+- Fixed a startup failure on Windows (`process.getuid is not a function`)
+
 ## [0.2.0] - 2026-10-22
 
 ### Added

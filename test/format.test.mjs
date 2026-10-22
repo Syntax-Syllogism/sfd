@@ -1,7 +1,9 @@
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import {
-  compactDescribe, compactQuery, formatApex, formatDeploy, formatTests, stripAttributes, summarizeDeploy, summarizeTests
+  filterLog, formatLog, formatLogList, compactDescribe, compactQuery, formatApex, formatDeploy, formatTests, stripAttributes, summarizeDeploy, summarizeTests, summarizeRetrieve, formatRetrieve, formatTracking
 } from "../src/format.mjs";
 
 test("compactQuery strips attributes at every depth", () => {
@@ -92,4 +94,72 @@ test("summarizeTests and formatTests list failures and coverage", () => {
 test("compact query retains continuation for incomplete results", () => {
   assert.deepEqual(compactQuery({ totalSize: 100001, done: false, records: [], nextRecordsUrl: "/next" }),
     { totalSize: 100001, done: false, records: [], nextRecordsUrl: "/next" });
+});
+
+
+test("retrieve summaries preserve relative files, failures and warnings; rendering collapses companions", () => {
+  const summary = summarizeRetrieve({
+    response: { success: true, status: "Succeeded", id: "09S", messages: { problem: "warning" } },
+    getFileResponses: () => [
+      { state: "Created", type: "ApexClass", fullName: "Foo", filePath: "/project/classes/Foo.cls" },
+      { state: "Created", type: "ApexClass", fullName: "Foo", filePath: "/project/classes/Foo.cls-meta.xml" }
+    ]
+  }, "/project");
+  assert.equal(summary.files.length, 2);
+  // Paths are relative to the project and use the platform's separator.
+  const foo = join("classes", "Foo.cls");
+  assert.equal(summary.files[0].path, foo);
+  assert.equal(formatRetrieve(summary, "dev"), `Retrieved 2 files from dev (09S)\n  + ApexClass Foo ${foo}\n  ! warning`);
+  const failed = summarizeRetrieve({ response: { success: false, status: "Failed", errorMessage: "bad retrieve" },
+    getFileResponses: () => [{ state: "Failed", type: "ApexClass", fullName: "Bad", problem: "not found" }]
+  }, "/project");
+  assert.equal(failed.success, false);
+  assert.match(formatRetrieve(failed, "dev"), /FAILED.*\n  ✖ ApexClass Bad: not found\n  ✖ bad retrieve/);
+  const partial = summarizeRetrieve({ response: { success: true }, getFileResponses: () => [{ state: "Failed", problem: "bad" }] }, "/project");
+  assert.equal(partial.success, false);
+});
+
+test("retrieve conflict refusal and empty results are compact", () => {
+  assert.equal(formatRetrieve({ success: true, message: "No remote changes to retrieve.", files: [], conflicts: [], warnings: [] }, "dev"), "No remote changes to retrieve.");
+  const result = formatRetrieve({ success: false, files: [], warnings: [], conflicts: [
+    { type: "ApexClass", fullName: "Foo", path: "Foo.cls" },
+    { type: "ApexClass", fullName: "Foo", path: "Foo.cls-meta.xml" }
+  ] }, "dev");
+  assert.equal(result, "CONFLICTS: 1 component changed both locally and in dev; rerun with --ignore-conflicts to overwrite\n  ! conflict ApexClass Foo Foo.cls");
+});
+
+test("tracking formats empty, changed, deleted and conflicting components", () => {
+  assert.equal(formatTracking({ local: [], remote: [], conflicts: [] }), "No changes.");
+  assert.equal(formatTracking({
+    local: [{ state: "modify", type: "ApexClass", fullName: "Foo", path: "Foo.cls" }],
+    remote: [{ state: "delete", type: "ApexClass", fullName: "Old" }],
+    conflicts: [{ type: "ApexClass", fullName: "Foo" }]
+  }), "local\n  ~ ApexClass Foo Foo.cls\nremote\n  - ApexClass Old\nconflicts\n  ! conflict ApexClass Foo");
+});
+
+
+test("debug log filtering keeps errors and high limits, dedupes, and leaves Apex unchanged", () => {
+  const body = readFileSync(new URL("./fixtures/sample.log", import.meta.url), "utf8");
+  assert.deepEqual(filterLog(body), ["[3] hello", "EXCEPTION [9] System.NullPointerException: boom ×2",
+    "FATAL: System.NullPointerException: boom", "VALIDATION", "VALIDATION Bad value", "FLOW bad flow UpdateRecords",
+    "LIMIT SOQL 87/100", "LIMIT CPU time 5000/10000"]);
+  assert.equal(formatApex({ compiled: true, success: true, logs: body }), "OK\n[3] hello\nFATAL: System.NullPointerException: boom");
+  assert.match(formatLog({ operation: "test", status: "Failed", duration: 30, length: 2048, body }), /^test Failed 30ms 2.0 KB\n/);
+  assert.equal(formatLogList([{ Id: "07L", StartTime: "2026-10-22T14:02:11.000Z", Operation: "test", Status: "Success", LogLength: 2048, DurationMilliseconds: 30 }]),
+    "07L 2026-10-22 14:02:11 test Success 2.0 KB 30ms");
+  assert.equal(formatLogList([]), "No debug logs found.");
+  assert.deepEqual(filterLog(""), []);
+  const summary = { setupFailures: [], failures: [], logs: [{ id: "07L", body, operation: "test", status: "Failed" }] };
+  assert.match(formatTests(summary, "dev"), /Logs:\n  07L\n    test Failed/);
+  assert.match(formatTests({ ...summary, logs: [{ id: "07L" }] }, "dev"), /Logs:\n  07L$/);
+});
+
+test("Flow limit summaries are omitted rather than presented as Flow errors", () => {
+  const body = [
+    "x|FLOW_INTERVIEW_FINISHED_LIMIT_USAGE|SOQL queries|1|100",
+    "x|FLOW_INTERVIEW_FINISHED_LIMIT_USAGE|SOQL queries|50|100",
+    "x|FLOW_INTERVIEW_FINISHED_LIMIT_USAGE|SOQL queries|100|100",
+    "x|FLOW_ELEMENT_ERROR|bad flow|UpdateRecords"
+  ].join("\n");
+  assert.deepEqual(filterLog(body), ["FLOW bad flow UpdateRecords"]);
 });

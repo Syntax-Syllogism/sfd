@@ -29,13 +29,17 @@ sfd query "SELECT Id, Name FROM Account LIMIT 5" -o my-org
 | `sfd rest <path>` | REST call. `-X <method>`, `--body <json\|@file>` | `sf api request rest` |
 | `sfd describe <sobject>` | Compact describe; `--raw` for the full one. `--tooling` | `sf sobject describe` |
 | `sfd deploy -d <path> \| -m <Type[:Name]>` | Deploy source. `--check-only`, `-l <level>`, `-t <test>`, `-w <minutes>` | `sf project deploy start` |
-| `sfd test` | Run Apex tests. `-n <class>`, `-t <Class.method>`, `-s <suite>`, `-l <level>`, `-c` (coverage), `-w <minutes>` | `sf apex run test --wait` |
+| `sfd retrieve [-d <path> \| -m <Type[:Name]> \| -x <package.xml>]` | Retrieve source; no selector pulls tracked remote changes. `--ignore-conflicts`, `-w <minutes>` | `sf project retrieve start` |
+| `sfd tracking [--local \| --remote] [--conflicts]` | List local, remote and conflicting source-tracked changes; `--conflicts` shows only conflicts | |
+| `sfd test` | Run Apex tests. `-n <class>`, `-t <Class.method>`, `-s <suite>`, `-l <level>`, `-c` (coverage), `-w <minutes>`, `--logs` | `sf apex run test --wait` |
+| `sfd logs [--count 10] [--user <username>]` | Recent debug logs, one line each; `--limit` aliases `--count` | `sf apex list log` |
+| `sfd logs get <id\|latest>` | Debug, exception, validation, Flow error and high limit usage lines. `--full` prints raw text | `sf apex get log` |
 | `sfd org` | Resolved username, org id, instance URL and API version | `sf org display` |
 | `sfd hook <agent>`, `check`, `install`, `uninstall` | Agent integration: rewrite `sf` commands before an agent runs them. See [docs/agent-hooks.md](docs/agent-hooks.md) | |
 | `sfd start \| stop \| status \| reload` | Daemon lifecycle; `reload` drops cached orgs and auth state | |
 
-`-d`, `-m`, `-n`, `-t` and `-s` repeat or take comma-separated lists. Every
-command takes `-o <alias>` and `--json` (the raw daemon response). Without `-o`
+`-d`, `-m`, `-n`, `-t` and `-s` repeat or take comma-separated lists. The org
+commands take `-o <alias>`, and `--json` prints the raw daemon response. Without `-o`
 the org resolves like `sf`: `SF_TARGET_ORG`, then the nearest
 `.sf/config.json`, then the global config.
 
@@ -45,13 +49,15 @@ not be reached or started, or a request timed out. Unreadable input files are
 usage errors and include the file path.
 
 Use `sf` (with `--json` when scripting) for anything sfd does not cover (org creation, package
-commands, retrieve, data import).
+commands, data import).
 
 ## Daemon lifecycle
 
 The first command starts the daemon detached; there is nothing to set up. It
 listens on a Unix socket in `$XDG_RUNTIME_DIR/sfd-<uid>/` (or the system temp
 directory), in a directory with mode `0700` and a socket with mode `0600`.
+On Windows it listens on a per-user named pipe (`\\.\pipe\sfd-<hash>`), and
+the log and pid files go in `%LOCALAPPDATA%\sfd\`.
 Access tokens stay in daemon memory and are never written to disk. The daemon
 log is `sfd.log` in the same directory; `sfd status` prints its path.
 
@@ -77,9 +83,11 @@ it down even if its protocol differs.
 
 - Queries fetch every page without a record cap. Compact results preserve
   `done` and any continuation URL supplied by Salesforce.
-- Deploys reload `sfdx-project.json` on every call and run one at a time per
-  daemon. After a successful deploy to an org that tracks source, sfd updates
-  source tracking as `sf project deploy start` does.
+- Deploys, retrieves and `tracking` share one queue per daemon, so they run
+  one at a time. Deploys reload `sfdx-project.json` on every call.
+- Retrieve conflicts, changes-only retrieves, and how `tracking` and deploys
+  update source tracking are described in
+  [docs/source-tracking.md](docs/source-tracking.md).
 - `deploy` without `-l` uses the Metadata API default. `-t` alone implies
   `RunSpecifiedTests`.
 - `test` without selectors runs `RunLocalTests`. A non-matching method is
@@ -87,13 +95,23 @@ it down even if its protocol differs.
 - Paths in `-d` and the project directory resolve from the client's working
   directory, not the daemon's.
 
+### Debug logs
+
+`logs`, `logs get` and `test --logs` create or extend the current user's
+developer TraceFlag for 30 minutes when it is missing, expired or has less than
+five minutes left, and print one notice on stderr when they do. `--no-trace`
+skips that setup. `logs --user` only filters the list. Setup needs Tooling API
+permission to manage TraceFlag and DebugLevel records. The TraceFlag rules,
+filtered output format and `test --logs` behavior are in
+[docs/debug-logs.md](docs/debug-logs.md).
+
 ## Environment
 
 | Variable | Purpose |
 | --- | --- |
-| `SFD_TIMEOUT_SECONDS` | Positive request deadline in seconds, including connection time. Overrides defaults: 3 seconds for health/lifecycle requests; 120 seconds for other operations, extended to at least the deploy/test `-w` wait plus 60 seconds (default waits: 33/60 minutes). Increase this for long queries or queued deploys. Timeout exits 3. |
+| `SFD_TIMEOUT_SECONDS` | Positive request deadline in seconds, including connection time. Overrides defaults: 3 seconds for health/lifecycle requests; 120 seconds for other operations, extended to at least the deploy/retrieve/test `-w` wait plus 60 seconds (default waits: 33/33/60 minutes). Increase this for long queries or queued deploys. Timeout exits 3. |
 | `SFD_IDLE_MINUTES` | Idle timeout, default 60. |
-| `SFD_RUNTIME_DIR` | Socket, log and pid directory. |
+| `SFD_RUNTIME_DIR` | Socket, log and pid directory (on Windows, log and pid only; the pipe name is derived from it). |
 | `SFD_SF_ROOT` | `@salesforce/cli` install to load libraries from, instead of the `sf` on `PATH`. |
 | `SFD_HANDLERS_MODULE` | Test seam: stub handlers module used by the CLI tests. |
 
@@ -103,7 +121,7 @@ it down even if its protocol differs.
 protocol (dispatch, version restart, drain, idle, stale socket), and the CLI
 end to end against stub handlers, and the agent hook adapters and `sf` rewrite
 rules. Injected Salesforce modules cover handler
-paging, auth refresh, deployment and test orchestration without an org.
+paging, auth refresh, deployment, retrieve, source tracking and test orchestration without an org.
 A real-org check is opt-in:
 
 ```bash

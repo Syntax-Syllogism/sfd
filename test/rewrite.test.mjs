@@ -85,11 +85,35 @@ const skips = [
 ];
 for (const [input, reason] of skips) test(`skip: ${input}`, () => assert.ok(rewrite(input).skip?.includes(reason), JSON.stringify(rewrite(input))));
 
-test("rewritten quoting round trips through a real shell without executing metacharacters", () => {
+test("rewritten quoting round trips through a real shell without executing metacharacters", { skip: process.platform === "win32" && "needs a POSIX /bin/sh" }, () => {
   const query = "SELECT Id WHERE Name = 'a|b;>c' AND Other = '$HOME `id`'";
   const input = `sf data query -q '${query.replaceAll("'", "'\\''")}'`;
   const result = rewrite(input);
   const capture = spawnSync("/bin/sh", ["-c", `sfd() { printf '%s\\n' "$@"; }; ${result.command}`], { encoding: "utf8" });
   assert.equal(capture.status, 0);
   assert.equal(capture.stdout, `query\n${query}\n`);
+});
+
+
+for (const [args, expected] of [
+  ["", "sfd retrieve"],
+  ["-m ApexClass:Foo ApexClass:Bar --ignore-conflicts -w 5 -o dev --json", "sfd retrieve -m 'ApexClass:Foo' -m 'ApexClass:Bar' --ignore-conflicts -w '5' -o 'dev'"],
+  ["--manifest=package.xml -c", "sfd retrieve -x 'package.xml' --ignore-conflicts"],
+  ["-d classes -d flows", "sfd retrieve -d 'classes' -d 'flows'"]
+]) test(`retrieve rewrite: ${args}`, () => assert.equal(rewrite(`sf project retrieve start ${args}`).command, expected));
+
+for (const args of ["--target-metadata-dir out", "-t out", "-r out", "--output-dir out", "--package-name pkg", "-n pkg", "-z", "--unzip", "-m ApexClass -d src"]) {
+  test(`retrieve skip: ${args}`, () => assert.ok(rewrite(`sf project retrieve start ${args}`).skip));
+}
+for (const command of ["retrieve", "deploy"]) test(`${command} preview stays unmapped`, () => assert.ok(rewrite(`sf project ${command} preview`).skip));
+
+
+test("debug log rewrites accept IDs or one latest log and skip file output", () => {
+  assert.equal(rewrite("sf apex list log -o dev --json").command, "sfd logs -o 'dev'");
+  assert.equal(rewrite("sf apex get log -i 07L000000000001").command, "sfd logs get '07L000000000001'");
+  assert.equal(rewrite("sf apex get log --log-id 07L000000000001").command, "sfd logs get '07L000000000001'");
+  assert.equal(rewrite("sf apex get log --number 1").command, "sfd logs get 'latest'");
+  for (const args of ["-n 2", "-i id -n 1", "-n 1 -d logs", "-n 1 --output-dir logs", ""]) {
+    assert.ok(rewrite(`sf apex get log ${args}`).skip, args);
+  }
 });

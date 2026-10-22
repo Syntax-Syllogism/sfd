@@ -12,8 +12,12 @@ on:
 
 jobs:
   ci:
-    name: CI Checks
-    runs-on: ubuntu-latest
+    name: CI Checks (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - name: Checkout repository

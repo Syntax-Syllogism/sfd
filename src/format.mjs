@@ -1,3 +1,5 @@
+import { relative, resolve } from "node:path";
+
 // Compact, token-friendly renderings of Salesforce results.
 
 const asArray = x => (x === undefined || x === null ? [] : Array.isArray(x) ? x : [x]);
@@ -54,14 +56,54 @@ export function formatApex(result, { fullLog = false } = {}) {
   if (fullLog) {
     lines.push(log);
   } else {
-    // Keep only USER_DEBUG and fatal lines; the rest of a debug log is noise for agents.
-    for (const line of log.split("\n")) {
-      const m = line.match(/\|USER_DEBUG\|\[(\d+)\]\|\w+\|(.*)$/);
-      if (m) lines.push(`[${m[1]}] ${m[2]}`);
-      else if (/\|FATAL_ERROR\|/.test(line)) lines.push(line.replace(/^.*\|FATAL_ERROR\|/, "FATAL: "));
-    }
+    lines.push(...filterLog(log, { apexOnly: true }));
   }
   return lines.join("\n");
+}
+
+// Anonymous Apex retains its original two-event rendering.
+export function filterLog(text, { apexOnly = false } = {}) {
+  const lines = [];
+  let inLimits = false;
+  for (const line of text.split(/\r?\n/)) {
+    const debug = line.match(/\|USER_DEBUG\|\[(\d+|EXTERNAL)\]\|\w+\|(.*)$/);
+    if (debug && (!apexOnly || debug[1] !== "EXTERNAL")) { lines.push(`[${debug[1]}] ${debug[2]}`); continue; }
+    if (/\|FATAL_ERROR\|/.test(line)) { lines.push(line.replace(/^.*\|FATAL_ERROR\|/, "FATAL: ")); continue; }
+    if (apexOnly) continue;
+    const event = line.match(/\|(EXCEPTION_THROWN|VALIDATION_FAIL|VALIDATION_ERROR|FLOW_ELEMENT_ERROR)(?:\|(.*))?$/);
+    if (event) {
+      const label = event[1] === "EXCEPTION_THROWN" ? "EXCEPTION" : event[1].startsWith("FLOW") ? "FLOW" : "VALIDATION";
+      lines.push(`${label} ${(event[2] ?? "").replaceAll("|", " ")}`.trimEnd());
+      continue;
+    }
+    if (line.includes("|LIMIT_USAGE_FOR_NS|")) { inLimits = true; continue; }
+    if (inLimits && /^\s*Number of |^\s*(Maximum CPU time|Maximum heap size)/.test(line)) {
+      const usage = line.match(/^\s*(.+?):\s*(\d+) out of (\d+)/);
+      if (usage && Number(usage[3]) > 0 && Number(usage[2]) >= Number(usage[3]) / 2) {
+        const name = usage[1].replace(/^Number of /, "").replace(/ queries$/, "").replace(/^Maximum /, "");
+        lines.push(`LIMIT ${name} ${usage[2]}/${usage[3]}`);
+      }
+    } else if (line.includes("|")) inLimits = false;
+  }
+  if (apexOnly) return lines;
+  const deduped = [];
+  for (let i = 0; i < lines.length;) {
+    let end = i + 1;
+    while (lines[end] === lines[i]) end++;
+    deduped.push(lines[i] + (end - i > 1 ? ` ×${end - i}` : ""));
+    i = end;
+  }
+  return deduped;
+}
+
+const logSize = bytes => bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes ?? 0} B`;
+
+export function formatLog(log) {
+  return [`${log.operation} ${log.status} ${log.duration ?? 0}ms ${logSize(log.length)}`, ...filterLog(log.body)].join("\n");
+}
+
+export function formatLogList(rows) {
+  return rows.length ? rows.map(row => `${row.Id} ${row.StartTime.replace("T", " ").replace(/\.\d+Z$/, "")} ${row.Operation} ${row.Status} ${logSize(row.LogLength)} ${row.DurationMilliseconds}ms`).join("\n") : "No debug logs found.";
 }
 
 export function formatDeploy(summary, org) {
@@ -134,5 +176,66 @@ export function formatTests(summary, org) {
   for (const c of summary.coverage ?? []) {
     lines.push(`  ${c.percentage.padStart(4)} ${c.name}${c.uncoveredLines.length ? ` uncovered: ${c.uncoveredLines.join(",")}` : ""}`);
   }
+  if (summary.logs?.length) {
+    lines.push("Logs:");
+    for (const log of summary.logs) {
+      lines.push(`  ${log.id}`);
+      if (log.body !== undefined) lines.push(...formatLog(log).split("\n").map(line => `    ${line}`));
+    }
+  }
   return lines.join("\n");
+}
+
+// Normalize both SDR file responses and STL change/status rows at the boundary.
+export function summarizeChanges(changes, projectDir, state) {
+  const files = changes.flatMap(c => (c.filenames?.length ? c.filenames : [c.filePath]).map(path => ({
+    state: state ?? c.state ?? (c.deleted ? "Deleted" : c.modified ? "Changed" : "Add"),
+    type: c.type, fullName: c.fullName ?? c.name,
+    path: path ? relative(projectDir, resolve(projectDir, path)) : undefined,
+    ...(c.problem ? { problem: c.problem } : {})
+  })));
+  return [...new Map(files.map(f => [JSON.stringify([f.state, f.type, f.fullName, f.path, f.problem]), f])).values()];
+}
+
+export function summarizeRetrieve(result, projectDir) {
+  const response = result.response;
+  const files = summarizeChanges(result.getFileResponses(), projectDir);
+  return {
+    success: Boolean(response.success) && !files.some(f => f.state === "Failed" || f.problem),
+    status: response.status, id: response.id, files,
+    warnings: asArray(response.messages), conflicts: [], errorMessage: response.errorMessage
+  };
+}
+
+function componentLines(files, conflict = false) {
+  // Collapse only a source file's companion XML; retain bundle files and all failures.
+  const paths = new Set(files.filter(f => !f.problem).map(f => `${f.type}:${f.fullName}:${f.path}`));
+  return files.filter(f => f.problem || !f.path?.endsWith("-meta.xml") ||
+    !paths.has(`${f.type}:${f.fullName}:${f.path.slice(0, -9)}`)).map(f => {
+    const state = String(f.state).toLowerCase();
+    const mark = conflict ? "! conflict" : f.problem || state === "failed" ? "✖" :
+      ["add", "added", "created"].includes(state) ? "+" : ["delete", "deleted"].includes(state) ? "-" : "~";
+    return `  ${mark} ${f.type} ${f.fullName}${f.path ? ` ${f.path}` : ""}${f.problem ? `: ${f.problem}` : ""}`;
+  });
+}
+
+export function formatRetrieve(summary, org) {
+  const count = new Set(summary.conflicts.map(c => `${c.type}:${c.fullName}`)).size;
+  const head = count
+    ? `CONFLICTS: ${count} component${count === 1 ? "" : "s"} changed both locally and in ${org}; rerun with --ignore-conflicts to overwrite`
+    : summary.message ?? (summary.success
+      ? `Retrieved ${summary.files.length} files from ${org}${summary.id ? ` (${summary.id})` : ""}`
+      : `FAILED (${summary.status}) ${org}${summary.id ? ` (${summary.id})` : ""}`);
+  const lines = [head, ...componentLines(summary.files), ...componentLines(summary.conflicts, true)];
+  for (const warning of summary.warnings) lines.push(`  ! ${typeof warning === "string" ? warning : warning.problem ?? JSON.stringify(warning)}`);
+  if (summary.errorMessage) lines.push(`  ✖ ${summary.errorMessage}`);
+  return lines.join("\n");
+}
+
+export function formatTracking(summary) {
+  const lines = [];
+  for (const section of ["local", "remote", "conflicts"]) {
+    if (summary[section].length) lines.push(section, ...componentLines(summary[section], section === "conflicts"));
+  }
+  return lines.join("\n") || "No changes.";
 }

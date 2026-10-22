@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { call, isRunning, startDaemon, DaemonError, VERSION } from "../src/client.mjs";
 import { findProjectDir, resolveTargetOrg } from "../src/project.mjs";
-import { formatApex, formatDeploy, formatTests } from "../src/format.mjs";
+import { formatApex, formatLog, formatLogList, formatDeploy, formatTests, formatRetrieve, formatTracking } from "../src/format.mjs";
 import { paths } from "../src/paths.mjs";
 import { UsageError } from "../src/usage-error.mjs";
 
@@ -19,8 +19,13 @@ Commands:
   describe <sobject>    Compact describe. --tooling, --raw for the full describe
   deploy                Deploy source. -d <path> (repeatable), -m <Type[:Name]> (repeatable),
                         --check-only, -l <test level>, -t <test> (repeatable), -w <minutes>
+  retrieve              Retrieve source. -d <path>, -m <Type[:Name]> or -x <package.xml>,
+                        -w <minutes>, --ignore-conflicts. No selector pulls tracked remote changes
+  tracking              Show source-tracked changes. --local | --remote, --conflicts (conflicts only)
   test                  Run Apex tests. -n <class> (repeatable), -t <Class.method> (repeatable),
-                        -s <suite> (repeatable), -l <test level>, -c (coverage), -w <minutes>
+                        -s <suite> (repeatable), -l <test level>, -c (coverage), -w <minutes>, --logs, --no-trace
+  logs                  List recent debug logs. --count/--limit <10>, --user <username>, --no-trace
+  logs get <id|latest>  Print a filtered log. --full for raw text, --no-trace
   org                   Show the resolved org (username, id, instance, API version)
   hook <agent|check|install|uninstall>
                         Integrate with Claude Code, Codex CLI or Gemini CLI
@@ -42,11 +47,22 @@ const options = {
   all: { type: "boolean" },
   raw: { type: "boolean" },
   log: { type: "boolean" },
+  logs: { type: "boolean" },
+  full: { type: "boolean" },
+  "no-trace": { type: "boolean" },
+  count: { type: "string" },
+  limit: { type: "string" },
+  user: { type: "string" },
   file: { type: "string", short: "f" },
   method: { type: "string", short: "X" },
   body: { type: "string" },
   "source-dir": { type: "string", short: "d", multiple: true },
   metadata: { type: "string", short: "m", multiple: true },
+  manifest: { type: "string", short: "x" },
+  "ignore-conflicts": { type: "boolean" },
+  local: { type: "boolean" },
+  remote: { type: "boolean" },
+  conflicts: { type: "boolean" },
   "check-only": { type: "boolean" },
   "test-level": { type: "string", short: "l" },
   tests: { type: "string", short: "t", multiple: true },
@@ -92,7 +108,7 @@ async function run(argv) {
     return runHook(argv.slice(1));
   }
   const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
-  const [command, ...rest] = positionals;
+  let [command, ...rest] = positionals;
   if (values.help || !command) { print(USAGE); return 0; }
 
   const cwd = process.cwd();
@@ -172,10 +188,46 @@ async function run(argv) {
       render = result => formatDeploy(result, req.org);
       break;
     }
+    case "retrieve": {
+      const dir = projectDir();
+      const sourcePaths = split(values["source-dir"])?.map(d => resolve(cwd, d));
+      const manifest = values.manifest ? resolve(cwd, values.manifest) : undefined;
+      for (const p of [...(sourcePaths ?? []), ...(manifest ? [manifest] : [])]) {
+        if (!existsSync(p)) throw new UsageError(`No such path: ${p}`);
+      }
+      const metadata = split(values.metadata);
+      if ([Boolean(sourcePaths?.length), Boolean(metadata?.length), Boolean(manifest)].filter(Boolean).length > 1) {
+        throw new UsageError("retrieve accepts only one of -d, -m or -x.");
+      }
+      req = { org: org(), projectDir: dir, sourcePaths, metadata, manifest,
+        ignoreConflicts: values["ignore-conflicts"], waitMinutes: wait(values) };
+      render = result => formatRetrieve(result, req.org);
+      break;
+    }
+    case "tracking":
+      if (values.local && values.remote) throw new UsageError("tracking accepts only one of --local or --remote.");
+      req = { org: org(), projectDir: projectDir(), local: values.local, remote: values.remote, conflicts: values.conflicts };
+      render = formatTracking;
+      break;
+    case "logs": {
+      if (rest[0] === "get") {
+        if (rest.length !== 2) throw new UsageError("logs get needs an ID or latest.");
+        command = "logGet";
+        req = { org: org(), id: rest[1], noTrace: values["no-trace"] };
+        render = result => values.full ? result.body : formatLog(result);
+      } else {
+        if (rest.length) throw new UsageError("logs accepts only get <id|latest>.");
+        const count = Number(values.count ?? values.limit ?? 10);
+        if (!Number.isSafeInteger(count) || count < 1) throw new UsageError("Log count must be a positive integer.");
+        req = { org: org(), count, user: values.user, noTrace: values["no-trace"] };
+        render = result => formatLogList(result.records);
+      }
+      break;
+    }
     case "test":
       req = {
         org: org(), classNames: split(values["class-names"]), tests: split(values.tests), suiteNames: split(values["suite-names"]),
-        testLevel: values["test-level"], codeCoverage: values["code-coverage"], waitMinutes: wait(values)
+        logs: values.logs, noTrace: values["no-trace"], testLevel: values["test-level"], codeCoverage: values["code-coverage"], waitMinutes: wait(values)
       };
       render = result => formatTests(result, req.org);
       break;
@@ -187,10 +239,14 @@ async function run(argv) {
   }
 
   const res = await call(command, req);
-  if (values.json) { print(res); return res.status === 0 ? okStatus(command, res.result) : 1; }
+  const trace = res.result?.trace ?? res.trace;
+  if (trace) {
+    process.stderr.write(`sfd: enabled debug logging for ${trace.username} until ${trace.expires} (TraceFlag ${trace.id})\n`);
+  }
+  if (values.json) { print(res); return res.status === 0 ? okStatus(command, res.result) : res.name === "UsageError" ? 2 : 1; }
   if (res.status !== 0) {
     process.stderr.write(`${res.name}: ${res.message}\n`);
-    return 1;
+    return res.name === "UsageError" ? 2 : 1;
   }
   print(render(res.result));
   return okStatus(command, res.result);
@@ -199,7 +255,7 @@ async function run(argv) {
 // A request can succeed while the Salesforce operation fails (compile error, failed deploy or test).
 function okStatus(command, result) {
   if (command === "apex") return result.compiled && result.success ? 0 : 1;
-  if (command === "deploy") return result.success ? 0 : 1;
+  if (command === "deploy" || command === "retrieve") return result.success ? 0 : 1;
   if (command === "test") return result.failing === 0 && !result.setupFailures?.length ? 0 : 1;
   return 0;
 }

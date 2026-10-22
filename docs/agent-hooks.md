@@ -69,8 +69,11 @@ for a skip, printing the skip reason. It never contacts the daemon.
 | --- | --- | --- |
 | `data query` | `query` | `-q` / `--query` is required. `-t` / `--use-tooling-api` becomes `--tooling`; `--all-rows` becomes `--all`. `-r human` and `-r json` are accepted and dropped. |
 | `apex run test` | `test` | Needs a positive `-w` / `--wait`, or `--synchronous`. `-n`, `-t`, `-s`, `-l`, `-c` and `-w` map directly. `--synchronous` is dropped, because `sfd test` always waits for the run. |
+| `apex list log` | `logs` | Lists recent logs; automatic TraceFlag setup applies. |
+| `apex get log` | `logs get` | `-i` / `--log-id` or `-n` / `--number 1` required. Output directory options stay with `sf`. Filtered output. |
 | `apex run` | `apex` | `-f <file>` maps directly. Code can also come from a pipeline into the command (`cat x.apex \| sf apex run`) or a heredoc. |
 | `project deploy start` | `deploy` | Needs `-d` or `-m`. `--dry-run` becomes `--check-only`. `-d`, `-m`, `-l`, `-t` and `-w` map directly. |
+| `project retrieve start` | `retrieve` | `-d`, `-m`, `-x` / `--manifest`, `-w` and `-c` / `--ignore-conflicts` map directly. No selector pulls remote changes. Selectors are mutually exclusive. |
 | `sobject describe` | `describe` | `-s` is required. `-t` becomes `--tooling`. |
 | `api request rest` | `rest` | Exactly one path. `-X` and `--body` map directly. A body needs an explicit method other than GET, because `sf` ignores bodies with GET while `sfd` infers POST from a body. |
 | `org display` | `org` | `-o` and `--json` only. |
@@ -87,6 +90,10 @@ Rewritten commands keep a trailing `2>&1` or `2>/dev/null`. A leading
 
 The rewriter skips these, and the agent runs the original command:
 
+- Retrieve output-directory, metadata-directory, package and zip options
+  (`-r`, `--output-dir`, `-t`, `--target-metadata-dir`, `-n`, `--package-name`,
+  `-z`, `--unzip`). Retrieve/deploy preview commands remain unmapped: they
+  preview selected operations and ignored files, rather than list all tracked changes.
 - Commands not in the table, legacy `sfdx` commands, and executable paths.
 - Env prefixes other than `SF_TARGET_ORG=`.
 - Output redirection (`>`, `>>`, `<` other than a heredoc into `apex run`), and

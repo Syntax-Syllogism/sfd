@@ -29,7 +29,7 @@ export function startDaemon(env = process.env) {
   const p = paths(env);
   const out = openSync(p.log, "a");
   const child = spawn(process.execPath, [fileURLToPath(new URL("./daemon.mjs", import.meta.url))], {
-    detached: true, stdio: ["ignore", out, out], env
+    detached: true, windowsHide: true, stdio: ["ignore", out, out], env
   });
   child.unref();
 }
@@ -55,7 +55,7 @@ export async function call(op, args = {}, { env = process.env, autoStart = true,
     try {
       const configured = Number(env.SFD_TIMEOUT_SECONDS);
       const health = ["ping", "status", "stop", "reload"].includes(op);
-      const waitMinutes = args.waitMinutes ?? (op === "deploy" ? 33 : op === "test" ? 60 : 0);
+      const waitMinutes = args.waitMinutes ?? (["deploy", "retrieve"].includes(op) ? 33 : op === "test" ? 60 : 0);
       const timeoutMs = Number.isFinite(configured) && configured > 0
         ? configured * 1000
         : health ? 3000 : Math.max(120_000, waitMinutes * 60_000 + 60_000);

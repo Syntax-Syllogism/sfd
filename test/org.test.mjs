@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // Real-org check: SFD_TEST_ORG=<alias> npm test
@@ -20,4 +23,31 @@ test("query, apex and describe against a real org", { skip: !org && "set SFD_TES
   const d = sfd(["describe", "Account"]);
   assert.equal(d.status, 0, d.stderr);
   assert.ok(JSON.parse(d.stdout).fields.some(f => f.name === "Name"));
+});
+
+
+test("retrieve an existing Apex class into a temporary project", { skip: !org && "set SFD_TEST_ORG to run" }, t => {
+  const query = sfd(["query", "SELECT Name FROM ApexClass WHERE NamespacePrefix = null LIMIT 1"]);
+  assert.equal(query.status, 0, query.stderr);
+  const name = JSON.parse(query.stdout).records[0]?.Name;
+  if (!name) { t.skip("org has no unmanaged Apex class to retrieve"); return; }
+  const project = mkdtempSync(join(tmpdir(), "sfd-retrieve-org-"));
+  t.after(() => rmSync(project, { recursive: true, force: true }));
+  mkdirSync(join(project, "force-app"));
+  writeFileSync(join(project, "sfdx-project.json"), JSON.stringify({ packageDirectories: [{ path: "force-app", default: true }] }));
+  const result = spawnSync(process.execPath, [bin, "retrieve", "-o", org, "-m", `ApexClass:${name}`, "--json"], { cwd: project, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(JSON.parse(result.stdout).result.success, true);
+  assert.ok(existsSync(join(project, "force-app", "main", "default", "classes", `${name}.cls`)));
+});
+
+
+test("enable tracing then fetch latest log after anonymous Apex", { skip: !org && "set SFD_TEST_ORG to run" }, () => {
+  const enabled = sfd(["logs"]);
+  assert.equal(enabled.status, 0, enabled.stderr);
+  const apex = sfd(["apex"], "System.debug('sfd debug log check');");
+  assert.equal(apex.status, 0, apex.stderr);
+  const latest = sfd(["logs", "get", "latest"]);
+  assert.equal(latest.status, 0, latest.stderr);
+  assert.match(latest.stdout, /sfd debug log check/);
 });

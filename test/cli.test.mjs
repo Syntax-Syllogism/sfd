@@ -71,3 +71,83 @@ test("deploy splits comma-separated and repeated source directories before resol
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).result.sourcePaths, ["one", "two", "three"].map(name => join(project, name)));
 });
+
+
+test("retrieve and tracking pass selectors and filters and preserve exit codes in text and JSON", () => {
+  const project = join(runtime, "retrieve-project");
+  mkdirSync(project);
+  for (const name of ["one", "two"]) mkdirSync(join(project, name));
+  writeFileSync(join(project, "sfdx-project.json"), "{}");
+  writeFileSync(join(project, "package.xml"), "<Package/>");
+  const run = args => spawnSync(process.execPath, [bin, ...args], { cwd: project, env, encoding: "utf8" });
+  const paths = run(["retrieve", "-d", "one,two", "-w", "2", "--json"]);
+  assert.equal(paths.status, 0, paths.stderr);
+  assert.deepEqual(JSON.parse(paths.stdout).result.sourcePaths, ["one", "two"].map(name => join(project, name)));
+  assert.equal(JSON.parse(paths.stdout).result.waitMinutes, 2);
+  const manifest = run(["retrieve", "-x", "package.xml", "--json"]);
+  assert.equal(manifest.status, 0, manifest.stderr);
+  assert.equal(JSON.parse(manifest.stdout).result.manifest, join(project, "package.xml"));
+  const metadata = run(["retrieve", "-m", "ApexClass:Foo,ApexClass:Bar", "--json"]);
+  assert.deepEqual(JSON.parse(metadata.stdout).result.metadata, ["ApexClass:Foo", "ApexClass:Bar"]);
+  assert.equal(run(["retrieve"]).status, 0);
+  for (const json of [[], ["--json"]]) {
+    const conflict = run(["retrieve", "-o", "conflict", ...json]);
+    assert.equal(conflict.status, 1, conflict.stderr);
+    assert.match(conflict.stdout, json.length ? /"success": false/ : /CONFLICTS/);
+    assert.equal(run(["retrieve", "-o", "conflict", "--ignore-conflicts", ...json]).status, 0);
+    for (const cmd of ["retrieve", "tracking"]) {
+      const untracked = run([cmd, "-o", "untracked", ...json]);
+      assert.equal(untracked.status, 2, untracked.stderr);
+      assert.match(json.length ? untracked.stdout : untracked.stderr, /source tracking/);
+    }
+  }
+  assert.equal(run(["tracking"]).stdout, "No changes.\n");
+  const filters = run(["tracking", "--remote", "--conflicts", "--json"]);
+  assert.equal(filters.status, 0, filters.stderr);
+  for (const args of [["retrieve", "-d", "missing"], ["retrieve", "-x", "missing"], ["retrieve", "-d", "one", "-m", "ApexClass"],
+    ["retrieve", "-x", "package.xml", "-m", "ApexClass"], ["retrieve", "-w", "0"], ["tracking", "--local", "--remote"]]) {
+    assert.equal(run(args).status, 2, args.join(" "));
+  }
+});
+
+
+test("logs renders lists, notices, filtered/raw/JSON bodies and validates arguments", () => {
+  const list = sfd(["logs", "--count", "2", "--user", "agent"]);
+  assert.equal(list.status, 0, list.stderr);
+  assert.equal(list.stdout, "07L000000000001 2026-10-22 14:02:11 test Success 2.0 KB 30ms\n");
+  assert.match(list.stderr, /sfd: enabled debug logging for agent until .*TraceFlag 7tf/);
+  const noTrace = sfd(["logs", "--no-trace", "--limit", "3", "--json"]);
+  assert.equal(noTrace.status, 0, noTrace.stderr);
+  assert.equal(noTrace.stderr, "");
+  assert.equal(JSON.parse(noTrace.stdout).result.noTrace, true);
+  assert.equal(JSON.parse(noTrace.stdout).result.count, 3);
+  const filtered = sfd(["logs", "get", "latest", "--no-trace"]);
+  assert.equal(filtered.status, 0, filtered.stderr);
+  assert.equal(filtered.stdout, "test Failed 30ms 2.0 KB\n[1] hello\n");
+  const full = sfd(["logs", "get", "07L000000000001", "--full"]);
+  assert.equal(full.status, 0, full.stderr);
+  assert.equal(full.stdout, "x|EXECUTION_STARTED\nx|USER_DEBUG|[1]|DEBUG|hello\n");
+  const json = sfd(["logs", "get", "latest", "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  assert.match(JSON.parse(json.stdout).result.body, /EXECUTION_STARTED/);
+  for (const args of [["logs", "get"], ["logs", "other"], ["logs", "get", "latest", "extra"], ["logs", "--count", "0"], ["logs", "--count", "2.5"]]) {
+    assert.equal(sfd(args).status, 2, args.join(" "));
+  }
+  const tests = sfd(["test", "-n", "FooTest", "--logs", "--no-trace"]);
+  assert.equal(tests.status, 1, tests.stderr);
+  assert.match(tests.stdout, /Logs:\n  07L000000000001\n    test Failed.*\n    \[1\] hello/);
+  const testJson = sfd(["test", "--logs", "--no-trace", "--json"]);
+  assert.equal(testJson.status, 1);
+  assert.equal(JSON.parse(testJson.stdout).result.noTrace, true);
+});
+
+
+test("TraceFlag notices survive a subsequent log error in text and JSON", () => {
+  for (const flags of [[], ["--json"]]) {
+    const result = sfd(["logs", "get", "missing", ...flags]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /enabled debug logging for agent/);
+    if (flags.length) assert.equal(JSON.parse(result.stdout).trace.id, "7tf");
+    else assert.match(result.stderr, /No debug logs found/);
+  }
+});

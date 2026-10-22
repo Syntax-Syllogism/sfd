@@ -1,5 +1,6 @@
 import net from "node:net";
 import { chmodSync, unlinkSync } from "node:fs";
+import { isPipe } from "./paths.mjs";
 
 // Newline-delimited JSON over a Unix socket: one request and one response per connection.
 // Responses are {status: 0, result} | {status: 1, name, message} | {restart: true}.
@@ -40,7 +41,7 @@ export async function startServer({ socket, version, handlers, idleMs = 60 * 60_
     draining = reason;
     clearTimeout(idleTimer);
     server.close();
-    try { unlinkSync(socket); } catch {}
+    if (!isPipe(socket)) try { unlinkSync(socket); } catch {}
     maybeExit();
   };
   const armIdle = () => {
@@ -57,7 +58,7 @@ export async function startServer({ socket, version, handlers, idleMs = 60 * 60_
     try {
       return { status: 0, result: await handler(req) };
     } catch (e) {
-      return { status: 1, name: e.name ?? "Error", message: e.message ?? String(e), errorCode: e.errorCode };
+      return { status: 1, name: e.name ?? "Error", message: e.message ?? String(e), errorCode: e.errorCode, ...(e.trace ? { trace: e.trace } : {}) };
     }
   }
 
@@ -90,10 +91,12 @@ export async function startServer({ socket, version, handlers, idleMs = 60 * 60_
   } catch (e) {
     if (e.code !== "EADDRINUSE") throw e;
     if (await probe(socket)) throw new AlreadyRunning("sfd is already running");
+    // A named pipe disappears with its owner, so only a Unix socket file can be stale.
+    if (isPipe(socket)) throw e;
     unlinkSync(socket);
     await listenOnce(server, socket);
   }
-  chmodSync(socket, 0o600);
+  if (!isPipe(socket)) chmodSync(socket, 0o600);
   armIdle();
   return { server, drain };
 }

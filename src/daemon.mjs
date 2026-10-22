@@ -4,13 +4,16 @@ import { PROTOCOL, VERSION } from "./version.mjs";
 import { AlreadyRunning, startServer } from "./server.mjs";
 import { paths } from "./paths.mjs";
 import { findSfRoot, sfInfo } from "./sf-root.mjs";
+import { pathToFileURL } from "node:url";
 
 const log = (...args) => console.error(new Date().toISOString(), ...args);
 const p = paths();
 const sf = sfInfo(findSfRoot());
 
 // SFD_HANDLERS_MODULE swaps in stub handlers for tests that must not touch an org.
-const { createHandlers } = await import(process.env.SFD_HANDLERS_MODULE ?? "./handlers.mjs");
+// import() needs a file URL for absolute Windows paths such as C:\\...
+const handlersModule = process.env.SFD_HANDLERS_MODULE ? pathToFileURL(process.env.SFD_HANDLERS_MODULE).href : "./handlers.mjs";
+const { createHandlers } = await import(handlersModule);
 const handlers = createHandlers(sf.root);
 
 // An sf upgrade rewrites its package.json; finish in-flight work and let the next call start fresh.
