@@ -5,14 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
-## [Unreleased]
+## [0.5.0] - 2026-10-23
 
-### Fixed
+### Added
 
-- Windows: `sfd start` and every other command failed with
-  "process.getuid is not a function". The daemon now listens on a per-user
-  named pipe, finds `sf` with `where` (including npm `sf.cmd` shims), and
-  starts without a console window. CI runs on Windows as well as Linux.
+- List commands that shell out to `sf` now return JSON output compatible with `sf`'s `--json` format
 
 ## [0.4.0] - 2026-10-22
 

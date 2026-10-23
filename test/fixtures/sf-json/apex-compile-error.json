@@ -1,0 +1,22 @@
+{
+  "name": "executeCompileFailure",
+  "message": "Compilation failed at Line 1 column 9 with the error:\n\nUnexpected token 'x'.",
+  "exitCode": 1,
+  "context": "Run",
+  "data": {
+    "success": false,
+    "compiled": false,
+    "compileProblem": "Unexpected token 'x'.",
+    "exceptionMessage": "",
+    "exceptionStackTrace": "",
+    "line": "1",
+    "column": "9",
+    "logs": ""
+  },
+  "stack": "executeCompileFailure: Compilation failed at Line 1 column 9 with the error:\n\nUnexpected token 'x'.\n    at SfCommandError.from (file:///path/to/node_modules/@salesforce/cli/node_modules/@salesforce/sf-plugins-core/lib/SfCommandError.js:48:16)\n    at Run.catch (file:///path/to/node_modules/@salesforce/cli/node_modules/@salesforce/sf-plugins-core/lib/sfCommand.js:332:47)\n    at Run._run (/path/to/node_modules/@salesforce/cli/node_modules/@oclif/core/lib/command.js:187:29)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async Config.runCommand (/path/to/node_modules/@salesforce/cli/node_modules/@oclif/core/lib/config/config.js:422:25)\n    at async run (/path/to/node_modules/@salesforce/cli/node_modules/@oclif/core/lib/main.js:97:16)\n    at async file:///path/to/node_modules/@salesforce/cli/bin/run.js:15:1",
+  "cause": "undefined",
+  "warnings": [],
+  "code": "executeCompileFailure",
+  "status": 1,
+  "commandName": "Run"
+}

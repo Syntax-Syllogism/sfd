@@ -10,6 +10,8 @@ import { commandHelp } from "../src/commands.mjs";
 import { snippet, upsertSnippet } from "../src/snippet.mjs";
 import { UsageError } from "../src/usage-error.mjs";
 
+import { SF_JSON_COMMANDS, sfEnvelope, sfError } from "../src/sf-json.mjs";
+
 const USAGE = `sfd ${VERSION}: fast Salesforce CLI operations through a warm local daemon
 
 Usage: sfd <command> [options]
@@ -28,11 +30,13 @@ const options = {
   "target-org": { type: "string", short: "o" },
   write: { type: "boolean" },
   json: { type: "boolean" },
+  "sf-json": { type: "boolean" },
   help: { type: "boolean", short: "h" },
   folder: { type: "string" },
   details: { type: "boolean" },
   tooling: { type: "boolean" },
   status: { type: "boolean" },
+  "skip-connection-status": { type: "boolean" },
   all: { type: "boolean" },
   csv: { type: "boolean" },
   raw: { type: "boolean" },
@@ -100,6 +104,7 @@ function print(value) {
 }
 
 async function run(argv) {
+  if (argv.includes("--sf-json") && ["hook", "discover"].includes(argv[0])) throw new UsageError("--sf-json is unsupported for this command.");
   if (argv[0] === "hook") {
     const { runHook } = await import("../src/hooks.mjs");
     return runHook(argv.slice(1));
@@ -121,6 +126,10 @@ async function run(argv) {
   let [command, ...rest] = positionals;
   if (values.help || !command) { print(USAGE); return 0; }
 
+  if (values["sf-json"]) {
+    const key = command === "org" && rest[0] === "list" ? "org list" : command;
+    if (!SF_JSON_COMMANDS.has(key) || values.csv || values.json || values.limit !== undefined) throw new UsageError("--sf-json requires query, describe, apex, org or org list, without --csv, --json or --limit.");
+  }
   const cwd = process.cwd();
   const org = () => resolveTargetOrg(values["target-org"], cwd);
   const projectDir = () => {
@@ -190,7 +199,7 @@ async function run(argv) {
       const q = rest.join(" ") || readStdin().trim();
       if (!q) throw new UsageError("query needs a SOQL string.");
       const limit = queryLimit(values.limit);
-      req = { org: org(), q, tooling: values.tooling, all: values.all, raw: values.raw, limit };
+      req = { org: org(), q, tooling: values.tooling, all: values.all, raw: values.raw || values["sf-json"], limit };
       if (values.csv) render = result => toCsv(result.records);
       break;
     }
@@ -198,7 +207,7 @@ async function run(argv) {
       const file = values.file ?? rest[0];
       const body = file ? readInputFile(file) : readStdin();
       if (!body.trim()) throw new UsageError("apex needs code from a file, -f <file>, or stdin.");
-      req = { org: org(), body };
+      req = { org: org(), body, raw: values["sf-json"] };
       render = result => formatApex(result, { fullLog: values.log });
       break;
     }
@@ -210,7 +219,7 @@ async function run(argv) {
     }
     case "describe": {
       if (!rest[0]) throw new UsageError("describe needs an sObject name.");
-      req = { org: org(), sobject: rest[0], tooling: values.tooling, raw: values.raw };
+      req = { org: org(), sobject: rest[0], tooling: values.tooling, raw: values.raw || values["sf-json"] };
       break;
     }
     case "list-metadata-types":
@@ -287,10 +296,10 @@ async function run(argv) {
       if (rest[0] === "list") {
         if (rest.length !== 1 || values["target-org"] !== undefined) throw new UsageError("org list accepts no target org or additional arguments.");
         command = "orgList";
-        req = { all: values.all, status: values.status };
+        req = { all: values.all, status: values.status || (values["sf-json"] && !values["skip-connection-status"]), raw: values["sf-json"] };
         render = formatOrgList;
       } else {
-        req = { org: org() };
+        req = { org: org(), raw: values["sf-json"] };
       }
       break;
     default:
@@ -298,6 +307,11 @@ async function run(argv) {
   }
 
   const res = await call(command, req);
+  if (values["sf-json"]) {
+    const envelope = sfEnvelope(command, res);
+    print(envelope);
+    return envelope.status;
+  }
   const trace = res.result?.trace ?? res.trace;
   if (trace) {
     process.stderr.write(`sfd: enabled debug logging for ${trace.username} until ${trace.expires} (TraceFlag ${trace.id})\n`);
@@ -328,7 +342,12 @@ function okStatus(command, result) {
 try {
   process.exitCode = await run(process.argv.slice(2));
 } catch (e) {
-  if (e instanceof UsageError || e.code?.startsWith?.("ERR_PARSE_ARGS")) {
+  if (process.argv.includes("--sf-json")) {
+    const exitCode = e instanceof UsageError || e.code?.startsWith?.("ERR_PARSE_ARGS") ? 2 : e instanceof DaemonError || ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"].includes(e.code) ? 3 : 1;
+    const command = process.argv[2] === "org" && process.argv[3] === "list" ? "orgList" : process.argv[2];
+    print(sfError(command, e, exitCode));
+    process.exitCode = exitCode;
+  } else if (e instanceof UsageError || e.code?.startsWith?.("ERR_PARSE_ARGS")) {
     process.stderr.write(`${e.message}\n`);
     process.exitCode = 2;
   } else if (e instanceof DaemonError || ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"].includes(e.code)) {

@@ -2,11 +2,13 @@
 
 `sfd org list`: which local orgs are listed, how defaults, types and expiry are
 derived, what `--status` checks and how it is bounded, the `--json` allowlist,
-and the no-token rule. Source: `src/handlers.mjs` (`orgList`,
-`refreshIfAuthChanged`, `withDeadline`), `src/format.mjs` (`formatOrgList`),
-`bin/sfd.mjs` (the `org` case), and `src/rewrite.mjs` (the `org list` mapping).
-Tests: `test/handlers.test.mjs` (the `org list` cases), `test/format.test.mjs`,
-`test/cli.test.mjs` and `test/rewrite.test.mjs`.
+the sf-compatible `--sf-json` envelope, and the no-token rule. Source:
+`src/handlers.mjs` (`orgList`, `refreshIfAuthChanged`, `withDeadline`),
+`src/format.mjs` (`formatOrgList`), `src/sf-json.mjs` (`orgEntry`,
+`sfJson.orgList`), `bin/sfd.mjs` (the `org` case), and `src/rewrite.mjs` (the
+`org list` mapping). Tests: `test/handlers.test.mjs` (the `org list` cases),
+`test/format.test.mjs`, `test/cli.test.mjs`, `test/rewrite.test.mjs` and
+`test/sf-json.test.mjs`.
 
 ```bash
 sfd org list
@@ -112,3 +114,14 @@ was given. The general rules are in [agent-hooks.md](agent-hooks.md).
 - Out of scope: `--clean`, verbose columns (instance, API version, last used,
   namespace, created by), login, logout, setting defaults, and caching
   `--status`. Use `sf` for those.
+
+## sf-compatible JSON
+
+`--sf-json` prints sf's `other`, `sandboxes`, `nonScratchOrgs`, `devHubs` and
+`scratchOrgs` groups with allowlisted auth fields and live scratch metadata.
+Regular orgs appear in `other`; all non-scratch orgs, including dev hubs and
+sandboxes, also appear in `nonScratchOrgs`. The access token is
+always sf's redaction placeholder and the envelope includes sf's secrets
+warning. Other auth secrets are excluded. Connection checks are enabled unless
+`--skip-connection-status` is passed; scratch metadata is enriched in either
+case. Existing primary-user filtering, alias ordering and expiry rules apply.

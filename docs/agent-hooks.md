@@ -5,9 +5,11 @@ an agent runs a shell command, the hook rewrites a supported `sf` invocation to
 the equivalent `sfd` command. Anything the rewriter does not recognize runs
 unchanged.
 
-Source: `src/hooks.mjs` (adapters, settings install and uninstall, `check`) and
-`src/rewrite.mjs` (the `sf` to `sfd` rewriter). Tests: `test/hooks.test.mjs`
-and `test/rewrite.test.mjs`.
+Source: `src/hooks.mjs` (adapters, settings install and uninstall, `check`),
+`src/rewrite.mjs` (the `sf` to `sfd` rewriter), `src/shell.mjs` (shell
+segment splitting) and `src/sf-json.mjs` (sf-compatible JSON envelopes). Tests:
+`test/hooks.test.mjs`, `test/rewrite.test.mjs`, `test/shell.test.mjs` and
+`test/sf-json.test.mjs`, with captures in `test/fixtures/sf-json/`.
 
 ## Install
 
@@ -87,32 +89,53 @@ means the rewritten command prints sfd's compact output, not sf's JSON
 envelope. `SF_TARGET_ORG=<alias>` as a leading env assignment is kept in front
 of the rewritten command.
 
-Rewritten commands keep a trailing `2>&1` or `2>/dev/null`. A leading
-`cd <directory> &&` is kept too.
+Shell lists (`;`, `&&`, `||` and newlines) are supported. Each eligible sf
+call is rewritten independently. Non-sf segments, including `cd ~/directory`,
+expansions, globs, comments and heredocs, are preserved byte for byte.
+`2>/dev/null` and `2>&1` may occur anywhere after `sf`; redirects are placed
+after the mapped arguments, in their original relative order.
+
+## sf-compatible JSON
+
+When stdout feeds a pipe or `>` / `>>` file redirect, the sf call must use
+`--json` and map to `query`, `describe`, `apex`, `org` or `org list`. The hook
+then uses `--sf-json`, which prints sf's envelope and raw result fields.
+`org list --skip-connection-status` also suppresses checks in this mode.
+
+Deliberate differences from sf:
+
+- Org output always uses sf's redacted access-token placeholder and secrets
+  warning. Secrets are never exposed, even with `SF_TEMP_SHOW_SECRETS` set.
+- Queries fetch all pages rather than stopping at sf's configured fetch cap.
+- Error envelopes omit sf's internal `stack` and `cause`. Salesforce query
+  error data and Apex failure data are retained to match the supplied contracts.
+
+`--sf-json` cannot be combined with `--json`, `--csv` or `--limit`.
+Default output and the existing compact `--json` mode are unchanged.
 
 ## Left unchanged
 
 The rewriter skips these, and the agent runs the original command:
 
-- Retrieve output-directory, metadata-directory, package and zip options
-  (`-r`, `--output-dir`, `-t`, `--target-metadata-dir`, `-n`, `--package-name`,
-  `-z`, `--unzip`). Retrieve/deploy preview commands remain unmapped: they
-  preview selected operations and ignored files, rather than list all tracked changes.
-- Commands not in the table, legacy `sfdx` commands, and executable paths.
-- Env prefixes other than `SF_TARGET_ORG=`.
-- Output redirection (`>`, `>>`, `<` other than a heredoc into `apex run`), and
-  `2>&1` anywhere but the end of the command.
-- Output piped into another command, such as `sf ... | jq`. Piping into
-  `sf apex run` is supported.
-- Chains other than a leading `cd <dir> &&` (`;`, `||`, `&`, and so on).
-- Shell expansion: `$` and backticks, even inside double quotes, and
-  `( ) { } [ ] * ? ~ #` outside quotes. Single-quoted text is literal.
-- Multi-line commands, other than a heredoc feeding `sf apex run` with a
-  literal delimiter.
-- Flags not in the table (for example test report output options), duplicate
-  flags, missing values, and values that start with `-`.
-- Result formats other than `human` or `json` (also `csv` for queries), and
-  `--verbose` on `org display`.
+- Commands and flags outside the supported table, legacy `sfdx`, executable
+  paths, and env prefixes other than `SF_TARGET_ORG=`.
+- A consumed-output call without `--json`, a command outside the five-command
+  compatibility list (including tests and deploys), or query `-r json`.
+- Consumed output with `2>&1`, since stderr differs between sf and sfd.
+- Consumed org output when the shell command mentions `accessToken` or
+  `sfdxAuthUrl` (case-insensitive), and any command mentioning
+  `SF_TEMP_SHOW_SECRETS`. A consumer requesting a secret must stay with sf.
+- Input file redirects and arbitrary fd redirects (`<`, `3>`) skip only their
+  own sf call. Background jobs (`&`, `&>`) and stderr pipelines (`|&`) skip the
+  entire shell command. Only Apex accepts piped input or a heredoc.
+- Compound commands: groups, subshells, functions, conditionals and loops.
+  These skip the entire shell command.
+- Expansions (`$`, backticks), unquoted tilde/glob syntax, and unsupported
+  operators inside the sf call. They do not block other eligible calls.
+- Unclosed quoting/substitution, missing heredoc terminators, and `<<-`.
+- Duplicate flags, missing values, values beginning with `-`, unsupported
+  result formats, and the retrieve/deploy output and preview options absent
+  from the table.
 
 ## Extending the rewriter
 
@@ -125,7 +148,9 @@ The rewriter skips these, and the agent runs the original command:
    `src/commands.mjs`, which generates its `--help` line and its agent snippet
    line.
 3. Add rewrite cases to `test/rewrite.test.mjs`. Add adapter cases to
-   `test/hooks.test.mjs` if the response shape changes.
+   `test/hooks.test.mjs` if the response shape changes. If the `--sf-json`
+   output of a command changes, update `src/sf-json.mjs` and its cases in
+   `test/sf-json.test.mjs`, using the captures in `test/fixtures/sf-json/`.
 4. Update the table above and the command table in the [README](../README.md).
 
 `sfd discover` also calls `rewrite()` and `lex()` to classify commands from

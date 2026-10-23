@@ -1,0 +1,15 @@
+{
+  "name": "NamedOrgNotFoundError",
+  "message": "Parsing --target-org \n\tNo authorization information found for nope-not-an-org.\nSee more help with --help",
+  "exitCode": 2,
+  "actions": [
+    "It looks like you mistyped the username or alias. Did you mean \"test-jawn\"?"
+  ],
+  "context": "OrgDisplayCommand",
+  "stack": "NamedOrgNotFoundError: Parsing --target-org \n\tNo authorization information found for nope-not-an-org.\nSee more help with --help\n    at SfCommandError.from (file:///path/to/node_modules/@salesforce/cli/node_modules/@salesforce/sf-plugins-core/lib/SfCommandError.js:48:16)\n    at OrgDisplayCommand.catch (file:///path/to/node_modules/@salesforce/cli/node_modules/@salesforce/sf-plugins-core/lib/sfCommand.js:332:47)\n    at OrgDisplayCommand._run (/path/to/node_modules/@salesforce/cli/node_modules/@oclif/core/lib/command.js:187:29)\n    at async Config.runCommand (/path/to/node_modules/@salesforce/cli/node_modules/@oclif/core/lib/config/config.js:422:25)\n    at async run (/path/to/node_modules/@salesforce/cli/node_modules/@oclif/core/lib/main.js:97:16)\n    at async file:///path/to/node_modules/@salesforce/cli/bin/run.js:15:1",
+  "cause": "undefined",
+  "warnings": [],
+  "code": "NamedOrgNotFoundError",
+  "status": 2,
+  "commandName": "OrgDisplayCommand"
+}

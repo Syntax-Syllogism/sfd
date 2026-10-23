@@ -52,6 +52,11 @@ commands take `-o <alias>` (except `org list`), and `--json` prints the raw daem
 the org resolves like `sf`: `SF_TARGET_ORG`, then the nearest
 `.sf/config.json`, then the global config.
 
+`--sf-json` prints sf-compatible JSON for `query`, `describe`, `apex`, `org`
+and `org list`, including warnings and error envelopes. It cannot be combined
+with `--json`, `--csv` or `--limit`. Org secrets use sf's redaction placeholder;
+queries fetch all pages. See [agent hooks](docs/agent-hooks.md#sf-compatible-json).
+
 `sfd list-metadata-types` sorts supported types, marks folder-based types with
 `(folder)` and shows up to six child names. Its daemon cache is scoped to the org
 and connection API version, and cleared by `sfd reload`, auth changes or session
@@ -216,6 +221,9 @@ adapter details, skip rules and the `SFD_HOOK_DISABLE=1` switch are in
 [docs/agent-hooks.md](docs/agent-hooks.md).
 
 ## Using sfd with coding agents
+
+The rewrite hook supports shell lists and pipelines. Eligible piped or redirected
+`sf --json` calls use `--sf-json` so jq consumers retain sf's result shape.
 
 `sfd discover` scans local Claude Code, Codex CLI and Gemini CLI transcripts for
 shell tool calls using `sf`, legacy `sfdx`, or `sfd`. It uses the hook's rewrite

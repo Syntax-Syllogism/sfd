@@ -1,3 +1,4 @@
+import { split } from "../shell.mjs";
 import { homedir } from "node:os";
 import { basename } from "node:path";
 import { rewrite, lex } from "../rewrite.mjs";
@@ -45,6 +46,20 @@ export function discoverOptions(values, now = Date.now()) {
 }
 
 function invocation(command) {
+  const parsed = split(command);
+  if (!parsed.skip) {
+    const found = [];
+    for (const segment of parsed.segments) for (const element of segment.elements) {
+      const text = command.slice(element.start, element.end);
+      const match = /^\s*(?:(?:\w+=(?:'[^']*'|"[^"]*"|\S+)|env|rtk|proxy|command)\s+)*(sf|sfd|sfdx)(?=\s|$)(.*)/s.exec(text);
+      if (!match) continue;
+      let words;
+      try { words = lex(match[2]).filter(token => !token.op).map(token => token.value); }
+      catch { words = match[2].trim().split(/\s+/); }
+      found.push([match[1], ...words]);
+    }
+    if (found.length) return found.find(words => words[0] !== "sfd") ?? found[0];
+  }
   let tokens;
   try { tokens = lex(command); }
   catch {

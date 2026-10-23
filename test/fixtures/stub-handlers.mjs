@@ -15,13 +15,15 @@ export function createHandlers() {
     ping: async () => ({ pong: true }),
     status: async () => ({ pid: process.pid, uptimeSeconds: 0, orgs: [] }),
     reload: async () => ({ reloaded: true }),
-    query: async ({ org, q, limit }) => {
+    describe: async ({ sobject, raw }) => ({ name: sobject, fields: [], ...(raw ? { full: true } : {}) }),
+    query: async ({ org, q, limit, raw }) => {
+      if (q === "bad") throw Object.assign(new Error("Invalid field"), { name: "INVALID_FIELD", errorCode: "INVALID_FIELD" });
       if (q === "empty") return { totalSize: 0, done: true, records: [] };
       if (q === "rows") {
         const records = [{ Name: "A", Owner: { Name: "User" } }, { Name: "B", Owner: null }];
         return { totalSize: 5012, done: false, records: records.slice(0, limit), ...(limit ? { truncated: true } : {}) };
       }
-      return { totalSize: 1, done: true, records: [{ org, q }] };
+      return { totalSize: 1, done: true, records: [{ org, q, ...(raw ? { attributes: { type: "Account" } } : {}) }] };
     },
     apex: async ({ body }) => body.includes("bad")
       ? { compiled: false, success: false, diagnostic: [{ compileProblem: "Unexpected token", lineNumber: 1, columnNumber: 1 }] }

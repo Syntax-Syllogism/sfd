@@ -54,13 +54,12 @@ for (const [input, expected] of rewrites) {
 const skips = [
   ["sf org list metadata", "needs metadata-type"],
   ...["metadata", "metadata-types"].flatMap(command => ["--api-version 67.0", "-f out.json", "--output-file out.json"].map(flag => [`sf org list ${command} ${flag}`, "unsupported flag"])),
-  ['sf data query -q "SELECT Id" --json | jq .', 'piped'],
+
   ["sf org display > out", 'redirection'], ["sf org display >> out", 'redirection'],
-  ["sf org display | tee out", 'piped'], ["sf org display | sf apex run", 'piped'],
-  ['echo "$(sf org display)"', 'substitution'], ['echo `sf org display`', 'substitution'],
+  ["sf org display | tee out", 'piped'],
+  ['echo "$(sf org display)"', 'plain sf'], ['echo `sf org display`', 'plain sf'],
   ['sf data query -q "$QUERY"', 'expansion'],
-  ["sf org display; echo done", 'chain'], ["sf org display || true", 'chain'],
-  ["echo x && sf org display", 'chain'], ["cd x && sf org display && true", 'chain'],
+
   ["sfdx force:data:soql:query", 'plain sf'], ["./node_modules/.bin/sf org display", 'plain sf'],
   ["SF_X=1 sf org display", 'plain sf'], ["env SF_TARGET_ORG=x sf org display", 'plain sf'],
   ["sfd org", 'plain sf'], ["sf data query -q q --api-version 67", 'unsupported flag'],
@@ -82,13 +81,13 @@ const skips = [
   ["sf api request rest /x --body=-", 'unsupported'],
   ["sf org display --verbose", 'unsupported flag'], ["sf org list --clean", 'unsupported flag'],
   ["sf org display < file", 'redirection'], ["cat x | sf org display", 'only for apex'],
-  ["sf org display &", 'chain'], ["sf apex run <<EOF\nx\nEOF\necho x", 'terminator'],
-  ["sf apex run <<EOF\nx\nEOF\nx\nEOF", 'terminator'],
+  ["sf org display &", 'background'],
+
   ["sf apex run <<EOF\nx\nEOF ", 'terminator'],
-  ["sf apex run <<EOF", 'terminator'], ["sf org display\necho x", 'multiline'],
+  ["sf apex run <<EOF", 'terminator'],
   ["sf data query -q 'unclosed", 'unclosed'], ["sf apex run -f *.apex", 'syntax'],
   ["sf apex run -f ~/x.apex", 'syntax'], ["sf org display # hi", 'syntax'],
-  ["cd - && sf org display", 'chain'], ["sf org display extra", 'positional'],
+   ["sf org display extra", 'positional'],
   ["sf sobject describe --sobject=-x", 'unsupported'],
   ["sf org display " + String.fromCharCode(92), 'escape'], ["", 'empty'], [null, 'empty']
 ];
@@ -103,19 +102,17 @@ test("rewritten quoting round trips through a real shell without executing metac
   assert.equal(capture.stdout, `query\n${query}\n`);
 });
 
-
 for (const [args, expected] of [
   ["", "sfd retrieve"],
   ["-m ApexClass:Foo ApexClass:Bar --ignore-conflicts -w 5 -o dev --json", "sfd retrieve -m 'ApexClass:Foo' -m 'ApexClass:Bar' --ignore-conflicts -w '5' -o 'dev'"],
   ["--manifest=package.xml -c", "sfd retrieve -x 'package.xml' --ignore-conflicts"],
   ["-d classes -d flows", "sfd retrieve -d 'classes' -d 'flows'"]
-]) test(`retrieve rewrite: ${args}`, () => assert.equal(rewrite(`sf project retrieve start ${args}`).command, expected));
+]) test(`retrieve rewrite: ${args}`, () => assert.equal(rewrite(`sf project retrieve start${args ? ` ${args}` : ""}`).command, expected));
 
 for (const args of ["--target-metadata-dir out", "-t out", "-r out", "--output-dir out", "--package-name pkg", "-n pkg", "-z", "--unzip", "-m ApexClass -d src"]) {
-  test(`retrieve skip: ${args}`, () => assert.ok(rewrite(`sf project retrieve start ${args}`).skip));
+  test(`retrieve skip: ${args}`, () => assert.ok(rewrite(`sf project retrieve start${args ? ` ${args}` : ""}`).skip));
 }
 for (const command of ["retrieve", "deploy"]) test(`${command} preview stays unmapped`, () => assert.ok(rewrite(`sf project ${command} preview`).skip));
-
 
 test("debug log rewrites accept IDs or one latest log and skip file output", () => {
   assert.equal(rewrite("sf apex list log -o dev --json").command, "sfd logs -o 'dev'");
@@ -133,4 +130,40 @@ test("org list preserves status defaults and supported flags", () => {
   assert.equal(rewrite("sf org list --all --json").command, "sfd org list --all --json --status");
   assert.equal(rewrite("sf org list --skip-connection-status --all --json").command, "sfd org list --all --json");
   for (const flag of ["--clean", "--verbose", "-p", "--no-prompt", "-o dev"]) assert.ok(rewrite(`sf org list ${flag}`).skip);
+});
+
+for (const [input, output] of [
+  ['sf data query -q q --json | jq .; gh pr view 73 --json state', "sfd query 'q' --sf-json | jq .; gh pr view 73 --json state"],
+  ['cd ~/projects/x && sf data query -q q 2>/dev/null --json | jq .', "cd ~/projects/x && sfd query 'q' --sf-json 2>/dev/null | jq ."],
+  ['S=$VAR; sf org display; echo *.txt && sf sobject describe -s Account --json > out.json', "S=$VAR; sfd org; echo *.txt && sfd describe 'Account' --sf-json > out.json"],
+  ["cat > f <<'EOF'\n$x; | bad\nEOF\nsf org display", "cat > f <<'EOF'\n$x; | bad\nEOF\nsfd org"],
+  ['echo $(echo x; echo y); sf org display || sf org display', 'echo $(echo x; echo y); sfd org || sfd org'],
+  ['sf org display\necho x', 'sfd org\necho x'],
+  ['sf org display --json >> out', 'sfd org --sf-json >> out'],
+  ['sf org list --json | jq .', 'sfd org list --status --sf-json | jq .'],
+  ['sf org list --skip-connection-status --json | jq .', 'sfd org list --skip-connection-status --sf-json | jq .'],
+  ['sf apex run -f code --json | jq .', "sfd apex -f 'code' --sf-json | jq ."],
+  ['sf org display 2>/dev/null -o dev 2>&1', "sfd org -o 'dev' 2>/dev/null 2>&1"],
+]) test(`list/pipe rewrite: ${input}`, () => assert.equal(rewrite(input).command, output));
+for (const input of [
+  'sf apex run test -y --json | jq .', 'sf project deploy start -d src --json | jq .', 'sf apex list log --json | head',
+  'sf data query -q q -r json | jq .', 'sf org display --json 2>&1 | jq .', 'sf org display --json > f 2>&1',
+  'sf org display --json | jq .result.accessToken', 'sf org list --json | jq .sfdxAuthUrl',
+  'SF_TEMP_SHOW_SECRETS=true; sf org display --json | jq .', 'SF_TEMP_SHOW_SECRETS=true; sf org display', 'sf org display 1> f', 'sf org display 2> f',
+  'sf org display 3> f', 'sf org display < f', 'sf org display --json > $FILE',
+]) test(`consumed output skip: ${input}`, () => assert.ok(rewrite(input).skip));
+test('partial rewrite retains skipped calls and opaque bytes', () => {
+  const input = 'sf data query -q "$Q";  sf org display\t|| echo "$X"';
+  const result = rewrite(input);
+  assert.equal(result.command, 'sf data query -q "$Q";  sfd org\t|| echo "$X"');
+  assert.equal(result.rewritten, 1);
+  assert.deepEqual(result.skipped, ['shell expansion or command substitution']);
+});
+
+test('heredoc bytes stay opaque when another pipeline or list element owns the body', () => {
+  for (const [input, output] of [
+    ["cat <<EOF; sf org display\n'\\\n$secret; | sf org display\nEOF", "cat <<EOF; sfd org\n'\\\n$secret; | sf org display\nEOF"],
+    ['sf apex run <<EOF --json | jq .\nSystem.debug(1);\nEOF', 'sfd apex --sf-json <<EOF | jq .\nSystem.debug(1);\nEOF'],
+    ["sf apex run <<EOF\n'\nEOF\nsf org display", "sfd apex <<EOF\n'\nEOF\nsfd org"],
+  ]) assert.equal(rewrite(input).command, output);
 });

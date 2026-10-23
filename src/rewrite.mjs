@@ -1,3 +1,6 @@
+import { split } from "./shell.mjs";
+import { SF_JSON_COMMANDS } from "./sf-json.mjs";
+
 // This is deliberately a literal-shell subset. Unknown shell syntax stays with sf.
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
 const skip = reason => ({ skip: reason });
@@ -118,7 +121,7 @@ function mapArgs(argv) {
   const positional = logTarget ? [logTarget] : mapping.required ? seen.get(mapping.required) : positionals;
   // Protect sfd's own option parser from values that could be interpreted as options.
   if (positional.some(v => v.startsWith("-"))) return skip("unsupported positional value");
-  return { command: ["sfd", mapping.sfd, ...positional.map(quote), ...output].join(" "), apex: mapping.sfd === "apex" };
+  return { command: ["sfd", mapping.sfd, ...positional.map(quote), ...output].join(" "), apex: mapping.sfd === "apex", subcommand: mapping.sfd, json: seen.has("json"), format: seen.has("r") };
 }
 
 export function rewrite(command) {
@@ -128,65 +131,76 @@ export function rewrite(command) {
   } catch (error) { return skip(error.message); }
 }
 
-function rewriteShell(command) {
-  // Only remove continuations outside single quotes; the lexer does the rest.
-  let source = "", single = false, double = false;
-  for (let i = 0; i < command.length; i++) {
-    const c = command[i];
-    if (c === "\n" && !single && !double) { source += command.slice(i); break; }
+function rewriteElement(text, consumed, stdin, whole) {
+  let continued = "", single = false, double = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
     if (c === "\\" && !single) {
-      if (command[i + 1] === "\n") { i++; continue; }
-      source += c + (command[++i] ?? ""); continue;
+      if (text[i + 1] === "\n") { continued += "  "; i++; continue; }
+      continued += c + (text[++i] ?? ""); continue;
     }
     if (c === "'" && !double) single = !single;
     if (c === '"' && !single) double = !double;
-    source += c;
+    if (c === "\n" && (single || double)) return skip("unsupported multiline command");
+    if (c === "\n") { continued += text.slice(i); break; }
+    continued += c;
   }
-  source = source.trimStart();
-  // Heredoc contents are opaque: preserve them byte for byte and require one literal delimiter.
-  const newline = source.indexOf("\n");
-  let body = "";
-  if (newline !== -1) { body = source.slice(newline); source = source.slice(0, newline); }
-  const tokens = lex(source);
-  let stderr = "";
-  while (["2>&1", "2>/dev/null"].includes(tokens.at(-1)?.op)) {
-    stderr = ` ${tokens.pop().op}${stderr}`;
-  }
+  const firstLine = continued.indexOf("\n");
+  const head = firstLine < 0 ? continued : continued.slice(0, firstLine);
+  const tokens = lex(head);
+  const start = tokens[0]?.value?.startsWith("SF_TARGET_ORG=") ? 1 : 0;
+  if (tokens[start]?.value !== "sf") return skip("not a plain sf invocation");
+  const words = [], redirects = [];
   let heredoc = "";
-  const hd = tokens.findIndex(t => t.op === "<<");
-  if (hd !== -1) {
-    const delimiter = tokens[hd + 1];
-    if (!delimiter || delimiter.op || hd + 2 !== tokens.length || !/^[A-Za-z_][\w]*$/.test(delimiter.value)) return skip("unsupported heredoc");
-    const contents = body.slice(1);
-    const lines = (contents.endsWith("\n") ? contents.slice(0, -1) : contents).split("\n");
-    if (lines.at(-1) !== delimiter.value || lines.slice(0, -1).includes(delimiter.value)) return skip("unsupported heredoc terminator");
-    heredoc = source.slice(tokens[hd].start, delimiter.end) + body;
-    tokens.splice(hd);
-  } else if (body.trim()) return skip("unsupported multiline command");
-  while (["2>&1", "2>/dev/null"].includes(tokens.at(-1)?.op)) {
-    stderr = ` ${tokens.pop().op}${stderr}`;
-  }
-  if (tokens.some(t => t.op && !["&&", "|"].includes(t.op))) return skip("output redirection or unsupported shell chain");
-  const chains = tokens.flatMap((t, i) => t.op === "&&" ? [i] : []);
-  let start = 0;
-  if (chains.length) {
-    if (chains.length !== 1 || chains[0] !== 2 || tokens[0].value !== "cd" || !tokens[1].value || tokens[1].value.startsWith("-")) return skip("unsupported && chain");
-    start = 3;
-  }
-  const pipes = tokens.flatMap((t, i) => t.op === "|" ? [i] : []);
-  if (pipes.length) {
-    if (pipes.some(i => i <= start || i === tokens.length - 1 || tokens[i - 1].op)) return skip("unsupported pipeline");
-    // Never rewrite sf whose stdout is consumed, even if a later segment is also sf.
-    for (const i of [start, ...pipes.map(p => p + 1)].slice(0, -1)) {
-      if (tokens[i]?.value === "sf" || tokens[i]?.value?.startsWith("SF_TARGET_ORG=")) return skip("sf output is piped");
+  for (let i = start + 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!token.op) {
+      if (/^\d+$/.test(token.value) && tokens[i + 1]?.start === token.end && tokens[i + 1].op) return skip("unsupported redirection");
+      words.push(token.value); continue;
     }
-    start = pipes.at(-1) + 1;
+    if (["2>/dev/null", "2>&1"].includes(token.op)) redirects.push(token.op);
+    else if ([">", ">>"].includes(token.op) && tokens[i + 1]?.value !== undefined) {
+      consumed = true;
+      redirects.push(`${token.op} ${head.slice(tokens[i + 1].start, tokens[i + 1].end)}`); i++;
+    } else if (token.op === "<<" && tokens[i + 1]?.value) {
+      if (heredoc) return skip("unsupported heredoc");
+      heredoc = text.slice(token.start, tokens[i + 1].end) + (firstLine < 0 ? "" : text.slice(firstLine));
+      i++;
+    } else return skip("unsupported redirection");
   }
-  if (tokens[start]?.value?.startsWith("SF_TARGET_ORG=")) start++;
-  if (tokens[start]?.value !== "sf") return skip("not a plain sf invocation (paths, env prefixes and sfdx are unsupported)");
-  if (tokens.slice(start).some(t => t.op)) return skip("unsupported shell operator");
-  const mapped = mapArgs(tokens.slice(start + 1).map(t => t.value));
+  const mapped = mapArgs(words);
   if (mapped.skip) return mapped;
-  if ((pipes.length || heredoc) && !mapped.apex) return skip("stdin is supported only for apex run");
-  return { command: source.slice(0, tokens[start].start) + mapped.command + stderr + (heredoc ? ` ${heredoc}` : ""), reason: "sfd: warm daemon, ~0.3 s" };
+  if ((stdin || heredoc) && !mapped.apex) return skip("stdin is supported only for apex run");
+  if (consumed) {
+    if (!SF_JSON_COMMANDS.has(mapped.subcommand) || !mapped.json || mapped.format) return skip("sf output is piped or redirected without compatible JSON (unsupported redirection)");
+    if (redirects.includes("2>&1")) return skip("stderr merged into consumed output");
+    if (mapped.subcommand.startsWith("org") && /accessToken|sfdxAuthUrl/i.test(whole)) return skip("consumer may read a token sfd never prints");
+    if (mapped.subcommand === "org list" && words.includes("--skip-connection-status")) mapped.command += " --skip-connection-status";
+    mapped.command = mapped.command.replace(/ --json\b/, "") + " --sf-json";
+  }
+  const prefix = head.slice(0, tokens[start].start);
+  const trailing = heredoc && firstLine >= 0 ? "" : firstLine < 0 ? text.match(/\s*$/)[0] : text.slice(firstLine);
+  return { command: prefix + mapped.command + redirects.map(r => ` ${r}`).join("") + (heredoc ? ` ${heredoc}` : "") + trailing };
+}
+
+function rewriteShell(command) {
+  if (/SF_TEMP_SHOW_SECRETS/i.test(command)) return skip("consumer may read a token sfd never prints");
+  const parsed = split(command);
+  if (parsed.skip) return parsed;
+  const replacements = [], skipped = [];
+  for (const segment of parsed.segments) {
+    for (const [index, element] of segment.elements.entries()) {
+      const text = command.slice(element.start, element.end);
+      if (!/^\s*(?:SF_TARGET_ORG=(?:'[^']*'|"[^"]*"|\S+)\s+)?(?:sf|'sf'|"sf")(?=\s|$)/.test(text)) continue;
+      let result;
+      try { result = rewriteElement(text, index < segment.elements.length - 1, index > 0, command); }
+      catch (error) { result = skip(error.message); }
+      if (result.skip) skipped.push(result.skip);
+      else replacements.push({ ...element, text: result.command });
+    }
+  }
+  if (!replacements.length) return skip(skipped[0] ?? "not a plain sf invocation (paths, env prefixes and sfdx are unsupported)");
+  let output = command;
+  for (const { start, end, text } of replacements.toReversed()) output = output.slice(0, start) + text + output.slice(end);
+  return { command: output, reason: replacements.length > 1 ? `sfd: rewrote ${replacements.length} calls; warm daemon, ~0.3 s` : "sfd: warm daemon, ~0.3 s", rewritten: replacements.length, skipped };
 }

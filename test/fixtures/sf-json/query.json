@@ -1,0 +1,26 @@
+{
+  "status": 0,
+  "result": {
+    "records": [
+      {
+        "attributes": {
+          "type": "Account",
+          "url": "/services/data/v68.0/sobjects/Account/001XX0000000012AAA"
+        },
+        "Id": "001XX0000000012AAA",
+        "Name": "Sample Account for Entitlements"
+      },
+      {
+        "attributes": {
+          "type": "Account",
+          "url": "/services/data/v68.0/sobjects/Account/001XX0000000014AAA"
+        },
+        "Id": "001XX0000000014AAA",
+        "Name": "WTmvh3iojp-A"
+      }
+    ],
+    "totalSize": 2,
+    "done": true
+  },
+  "warnings": []
+}

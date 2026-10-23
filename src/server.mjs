@@ -58,7 +58,7 @@ export async function startServer({ socket, version, handlers, idleMs = 60 * 60_
     try {
       return { status: 0, result: await handler(req) };
     } catch (e) {
-      return { status: 1, name: e.name ?? "Error", message: e.message ?? String(e), errorCode: e.errorCode, ...(e.trace ? { trace: e.trace } : {}) };
+      return { status: 1, name: e.name ?? "Error", message: e.message ?? String(e), errorCode: e.errorCode, ...(e.trace ? { trace: e.trace } : {}), ...(req.raw && e.actions ? { actions: e.actions } : {}) };
     }
   }
 

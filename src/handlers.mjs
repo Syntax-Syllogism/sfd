@@ -5,6 +5,27 @@ import { UsageError } from "./usage-error.mjs";
 import { sfRequire } from "./sf-root.mjs";
 import { asArray, compactDescribe, compactQuery, summarizeDeploy, summarizeTests, summarizeRetrieve, summarizeChanges } from "./format.mjs";
 
+import { pick, orgEntry } from "./sf-json.mjs";
+
+function scratchDetails(row) {
+  return {
+    status: row.Status, expirationDate: row.ExpirationDate,
+    createdBy: row.CreatedBy?.Username, createdDate: row.CreatedDate,
+    signupUsername: row.SignupUsername, edition: row.Edition,
+    orgName: row.OrgName, namespace: row.Namespace
+  };
+}
+
+function rawListEntry(fields, org, lastUsed) {
+  const result = {
+    ...orgEntry(fields), lastUsed, alias: org.alias ?? undefined,
+    isDefaultUsername: org.isDefault, isDefaultDevHubUsername: org.isDefaultDevHub,
+    isScratch: org.type === "Scratch"
+  };
+  if (org.isDefault || org.isDefaultDevHub) result.defaultMarker = org.isDefault ? "(U)" : "(D)";
+  return result;
+}
+
 const soqlString = value => `'${String(value).replaceAll("\\", "\\\\").replaceAll("'", "\\'")}'`;
 const LOG_FIELDS = "Id, LogUser.Username, Operation, Request, Status, LogLength, StartTime, DurationMilliseconds";
 const LOG_CLOCK_SKEW_MS = 5 * 60 * 1000;
@@ -208,11 +229,26 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       return { reloaded: true };
     },
 
-    org: ({ org }) => withConn(org, (conn, o) => ({
-      alias: org, username: o.getUsername(), orgId: o.getOrgId(), instanceUrl: conn.instanceUrl, apiVersion: conn.getApiVersion()
-    })),
+    org: ({ org, raw }) => withConn(org, async (conn, o) => {
+      if (!raw) return { alias: org, username: o.getUsername(), orgId: o.getOrgId(), instanceUrl: conn.instanceUrl, apiVersion: conn.getApiVersion() };
+      const auth = await core.AuthInfo.create({ username: o.getUsername() });
+      const fields = auth.getFields();
+      const state = await core.StateAggregator.getInstance();
+      const result = { ...pick(fields, "instanceUrl username clientId expirationDate"), id: fields.orgId, apiVersion: fields.instanceApiVersion ?? conn.getApiVersion(), alias: state.aliases.getAll(o.getUsername())[0] };
+      if (fields.devHubUsername) {
+        result.devHubId = fields.devHubUsername;
+        const hub = await getOrg(fields.devHubUsername);
+        const rows = await withDeadline(() => hub.getConnection().query(`SELECT Status, ExpirationDate, CreatedBy.Username, Edition, OrgName, CreatedDate, SignupUsername FROM ScratchOrgInfo WHERE ScratchOrg = ${soqlString(fields.orgId.slice(0, 15))}`));
+        const row = rows.records.find(r => r.SignupUsername === fields.username) ?? rows.records[0];
+        if (row) Object.assign(result, scratchDetails(row), { edition: row.Edition ?? undefined, namespace: row.Namespace ?? undefined });
+      } else {
+        try { await withDeadline(() => o.refreshAuth()); result.connectedStatus = "Connected"; }
+        catch (error) { result.connectedStatus = error.name; }
+      }
+      return result;
+    }),
 
-    orgList: async ({ all = false, status = false } = {}) => {
+    orgList: async ({ all = false, status = false, raw = false } = {}) => {
       await refreshIfAuthChanged();
       const state = await core.StateAggregator.getInstance();
       const config = await core.ConfigAggregator.create();
@@ -250,7 +286,12 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
             if (fields.expirationDate) org.expirationDate = fields.expirationDate;
             org.expired = Boolean(fields.expirationDate && fields.expirationDate.slice(0, 10) < new Date().toISOString().slice(0, 10));
           }
-          return { org, devHubUsername: fields.devHubUsername };
+          let lastUsed;
+          if (raw) {
+            try { lastUsed = statSync(join(home, ".sfdx", `${username}.json`)).atime.toISOString(); }
+            catch { /* Some auth providers do not have a local file. */ }
+          }
+          return { org, devHubUsername: fields.devHubUsername, ...(raw ? { raw: rawListEntry(fields, org, lastUsed) } : {}) };
         } catch {
           // Never log auth fields or vendor error messages, which can contain secrets.
           console.warn("sfd org list: skipping unreadable local authorization");
@@ -258,9 +299,9 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
         }
       }));
       const readable = entries.filter(Boolean);
-      if (status) {
+      if (status || raw) {
         const hubs = new Map();
-        const checks = readable.filter(({ org }) => org.type !== "Scratch").map(async ({ org }) => {
+        const checks = readable.filter(({ org }) => status && org.type !== "Scratch").map(async ({ org }) => {
           try {
             await withDeadline(async () => (await getOrg(org.username)).refreshAuth());
             org.status = "Connected";
@@ -278,11 +319,20 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
           try {
             const result = await withDeadline(async () => {
               const org = await getOrg(hub);
-              return org.getConnection().query(`SELECT ScratchOrg, Status, ExpirationDate FROM ScratchOrgInfo WHERE ScratchOrg IN (${scratchOrgs.map(o => soqlString(o.orgId.slice(0, 15))).join(",")})`);
+              const result = await org.getConnection().query(`SELECT ScratchOrg, Status, ExpirationDate${raw ? ", CreatedBy.Username, CreatedDate, SignupUsername, Edition, OrgName, Namespace" : ""} FROM ScratchOrgInfo WHERE ScratchOrg IN (${scratchOrgs.map(o => soqlString(o.orgId.slice(0, 15))).join(",")})`);
+              if (raw) result.records = result.records.map(row => ({ ...row, devHubOrgId: org.getOrgId() }));
+              return result;
             });
             for (const org of scratchOrgs) {
               const row = result.records.find(r => r.ScratchOrg?.slice(0, 15) === org.orgId.slice(0, 15));
               if (!row) continue;
+              if (raw) {
+                const data = readable.find(entry => entry.org === org).raw;
+                Object.assign(data, scratchDetails(row), {
+                  attributes: row.attributes, devHubId: row.devHubOrgId, devHubOrgId: row.devHubOrgId,
+                  isExpired: row.Status === "Expired" || row.Status === "Deleted"
+                });
+              }
               org.status = row.Status;
               if (row.ExpirationDate) org.expirationDate = row.ExpirationDate;
               org.expired = row.Status === "Expired" || row.Status === "Deleted";
@@ -293,7 +343,11 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       const listed = readable.map(entry => entry.org);
       const visible = all ? listed : listed.filter(org => !org.expired);
       visible.sort((a, b) => (a.alias ?? "").localeCompare(b.alias ?? "") || a.username.localeCompare(b.username));
-      return { orgs: visible, hiddenExpired: listed.length - visible.length };
+      return { orgs: raw ? visible.map(org => {
+        const data = readable.find(entry => entry.org === org).raw;
+        if (org.type !== "Scratch" && org.status) data.connectedStatus = org.status;
+        return data;
+      }) : visible, hiddenExpired: listed.length - visible.length };
     },
 
     query: ({ org, q, tooling, all, raw, limit }) => withConn(org, async conn => {
@@ -313,7 +367,12 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       return output;
     }),
 
-    apex: ({ org, body }) => withConn(org, conn => new (apex().ExecuteService)(conn).executeAnonymous({ apexCode: body })),
+    apex: ({ org, body, raw }) => withConn(org, async conn => {
+      const result = await new (apex().ExecuteService)(conn).executeAnonymous({ apexCode: body });
+      if (!raw) return result;
+      const diagnostic = result.diagnostic?.[0];
+      return { ...result, ...(diagnostic ? { compileProblem: diagnostic.compileProblem, exceptionMessage: diagnostic.exceptionMessage, exceptionStackTrace: diagnostic.exceptionStackTrace, line: diagnostic.lineNumber, column: diagnostic.columnNumber } : {}) };
+    }),
 
     rest: ({ org, method, url, body, headers }) => withConn(org, conn => conn.request({
       method, url, body: body === undefined || typeof body === "string" ? body : JSON.stringify(body),

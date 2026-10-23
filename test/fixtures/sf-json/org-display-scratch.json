@@ -1,0 +1,23 @@
+{
+  "status": 0,
+  "result": {
+    "id": "00DXX0000000006AAA",
+    "devHubId": "user2@example.com",
+    "apiVersion": "68.0",
+    "accessToken": "[REDACTED] Use 'sf org auth show-access-token' to view",
+    "instanceUrl": "https://example-1-dev-ed.scratch.my.salesforce.com",
+    "username": "user1@example.com",
+    "clientId": "PlatformCLI",
+    "status": "Active",
+    "expirationDate": "2026-10-23",
+    "createdBy": "user2@example.com",
+    "edition": "Developer",
+    "orgName": "Example Company",
+    "createdDate": "2026-10-20T19:31:28.000+0000",
+    "signupUsername": "user1@example.com",
+    "alias": "checkr-install"
+  },
+  "warnings": [
+    "Secrets are now hidden from 'sf org display' command output. Use the 'sf org auth' commands instead. As a temporary workaround, you can set SF_TEMP_SHOW_SECRETS=true to render these secrets. This workaround will be removed in an upcoming release."
+  ]
+}

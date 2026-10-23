@@ -152,7 +152,10 @@ test("check reports rewrite or skip and never starts daemon", t => {
   const result = run(["check", 'sf data query -q "SELECT Id" -o dev --json'], "", dir);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "→ sfd query 'SELECT Id' -o 'dev'\n");
-  const skipped = run(["check", 'sf data query -q "SELECT Id" --json | jq .'], "", dir);
+  const consumed = run(["check", 'sf data query -q "SELECT Id" --json | jq .'], "", dir);
+  assert.equal(consumed.status, 0, consumed.stderr);
+  assert.equal(consumed.stdout, "→ sfd query 'SELECT Id' --sf-json | jq .\n");
+  const skipped = run(["check", 'sf data query -q "SELECT Id" | jq .'], "", dir);
   assert.equal(skipped.status, 1);
   assert.match(skipped.stdout, /skip:.*piped/);
   const disabled = run(["check", "sf org display"], "", dir, { SFD_HOOK_DISABLE: "1" });

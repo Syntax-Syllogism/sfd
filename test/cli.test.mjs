@@ -1,3 +1,4 @@
+import { socketPath } from '../src/paths.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
@@ -221,4 +222,52 @@ test("metadata CLI renders types, members and details and passes selectors", () 
     assert.equal(bad.status, 2);
     assert.match(json.length ? bad.stdout : bad.stderr, /Did you mean ApexClass/);
   }
+});
+
+test('--sf-json prints envelopes without stderr and validates combinations', () => {
+  for (const args of [['query', 'q'], ['describe', 'Account'], ['org'], ['org', 'list']]) {
+    const result = sfd([...args, '--sf-json']);
+    assert.equal(result.status, 0, result.stderr);
+    const envelope = JSON.parse(result.stdout);
+    assert.equal(envelope.status, 0);
+    assert.ok(Array.isArray(envelope.warnings));
+    assert.equal(result.stderr, '');
+  }
+  const query = JSON.parse(sfd(['query', 'q', '--sf-json']).stdout);
+  assert.deepEqual(query.result.records[0].attributes, { type: 'Account' });
+  assert.deepEqual(query.warnings, []);
+  assert.equal(JSON.parse(sfd(['describe', 'Account', '--sf-json']).stdout).result.full, true);
+  const queryError = sfd(['query', 'bad', '--sf-json']);
+  assert.equal(queryError.status, 1);
+  assert.equal(queryError.stderr, '');
+  assert.deepEqual(JSON.parse(queryError.stdout), { name: 'INVALID_FIELD', message: 'Invalid field', exitCode: 1, context: 'DataSoqlQueryCommand', data: { message: 'Invalid field', errorCode: 'INVALID_FIELD' }, warnings: [], code: '1', status: 1, commandName: 'DataSoqlQueryCommand' });
+  const bad = sfd(['apex', '--sf-json'], 'bad code');
+  assert.equal(bad.status, 1);
+  assert.equal(JSON.parse(bad.stdout).name, 'executeCompileFailure');
+  assert.equal(bad.stderr, '');
+  for (const args of [['query', 'q', '--csv'], ['query', 'q', '--json'], ['query', 'q', '--limit', '1'], ['status'], ['test'], ['query'], ['hook', 'check', 'sf org display'], ['discover']]) {
+    const result = sfd([...args, '--sf-json']);
+    assert.equal(result.status, 2, result.stdout);
+    assert.equal(JSON.parse(result.stdout).exitCode, 2);
+    assert.equal(result.stderr, '');
+  }
+});
+
+test('--sf-json daemon failure remains JSON with exit 3', async () => {
+  const { createServer } = await import('node:net');
+  const { spawn } = await import('node:child_process');
+  const dir = join(runtime, 'bad-response');
+  mkdirSync(dir);
+  const server = createServer(socket => socket.once('data', () => socket.end('invalid JSON')));
+  await new Promise(resolve => server.listen(socketPath(dir), resolve));
+  try {
+    const child = spawn(process.execPath, [bin, 'query', 'q', '--sf-json'], { env: { ...env, SFD_RUNTIME_DIR: dir } });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', chunk => { stdout += chunk; });
+    child.stderr.on('data', chunk => { stderr += chunk; });
+    const status = await new Promise(resolve => child.on('close', resolve));
+    assert.equal(status, 3, stderr);
+    assert.equal(JSON.parse(stdout).exitCode, 3);
+    assert.equal(stderr, '');
+  } finally { await new Promise(resolve => server.close(resolve)); }
 });

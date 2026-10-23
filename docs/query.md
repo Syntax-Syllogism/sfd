@@ -1,12 +1,13 @@
 # Query output
 
 `sfd query`: the row limit, the CSV layout, the output mode for each flag
-combination, and the truncation trailer. Source: `src/handlers.mjs` (the `query`
-handler and its paging loop), `src/format.mjs` (`compactQuery`, `flattenRecord`,
-`toCsv`), and `bin/sfd.mjs` (`queryLimit`, the query case in `run`, and the
-trailer). Tests: `test/handlers.test.mjs` (limit paging and slicing),
-`test/format.test.mjs` (`toCsv`, `flattenRecord`), and `test/cli.test.mjs`
-(stdout and stderr by mode, `--limit` validation).
+combination, the sf-compatible `--sf-json` envelope, and the truncation trailer.
+Source: `src/handlers.mjs` (the `query` handler and its paging loop),
+`src/format.mjs` (`compactQuery`, `flattenRecord`, `toCsv`), `src/sf-json.mjs`
+(`sfJson.query`, `sfEnvelope`), and `bin/sfd.mjs` (`queryLimit`, the query case in
+`run`, and the trailer). Tests: `test/handlers.test.mjs` (limit paging and
+slicing), `test/format.test.mjs` (`toCsv`, `flattenRecord`), `test/cli.test.mjs`
+(stdout and stderr by mode, `--limit` validation) and `test/sf-json.test.mjs`.
 
 ```bash
 sfd query "SELECT Id, Name, Owner.Name FROM Account" --csv --limit 200
@@ -86,3 +87,11 @@ The `human` and `json` result formats are accepted and dropped, as described in
 - The trailer and output-mode rules are in `run` in `bin/sfd.mjs`. Keep the
   stdout and stderr split as the table describes, and keep the README and
   `USAGE` flags in sync.
+
+## sf-compatible JSON
+
+`--sf-json` requests raw records (including relationship `attributes`) and
+prints `{status: 0, result, warnings: []}`. A completed query omits
+`nextRecordsUrl`. It fetches every page, even beyond sf's configurable fetch
+cap. It cannot be combined with `--limit`, `--csv` or `--json`. Consumed
+`sf data query --json` calls use this mode through the rewrite hook.

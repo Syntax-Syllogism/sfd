@@ -2,13 +2,13 @@ export const COMMANDS = [
   {
     "name": "query",
     "args": "<soql>",
-    "summary": "Run SOQL (all pages). --tooling, --all (include deleted), --limit <n>, --csv",
+    "summary": "Run SOQL (all pages). --tooling, --all (include deleted), --limit <n>, --csv. --sf-json for sf-compatible JSON",
     "agentTip": "\"<soql>\" --csv --limit 200: SOQL; --tooling, --all"
   },
   {
     "name": "apex",
     "args": "[file]",
-    "summary": "Run anonymous Apex from a file, -f <file>, or stdin. --log for the full debug log",
+    "summary": "Run anonymous Apex from a file, -f <file>, or stdin. --log for the full debug log. --sf-json for sf-compatible JSON",
     "agentTip": "-f <file> (or stdin): anonymous Apex; debug and fatal lines"
   },
   {
@@ -20,7 +20,7 @@ export const COMMANDS = [
   {
     "name": "describe",
     "args": "<sobject>",
-    "summary": "Compact describe. --tooling, --raw for the full describe",
+    "summary": "Compact describe. --tooling, --raw for the full describe. --sf-json for sf-compatible JSON",
     "agentTip": "<sobject>: compact describe; --tooling, --raw",
     "agentGroup": "describe"
   },
@@ -81,14 +81,14 @@ export const COMMANDS = [
   {
     "name": "org",
     "args": "",
-    "summary": "Show the resolved org (username, id, instance, API version)",
+    "summary": "Show the resolved org (username, id, instance, API version). --sf-json for sf-compatible JSON",
     "agentTip": ": resolved org details",
     "agentGroup": "orgs"
   },
   {
     "name": "org list",
     "args": "[--all] [--status]",
-    "summary": "List authenticated orgs (local; --status pings)",
+    "summary": "List authenticated orgs (local; --status pings). --sf-json for sf-compatible JSON",
     "agentTip": "[--all] [--status]: list local orgs; optional live checks",
     "agentGroup": "orgs"
   },

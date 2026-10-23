@@ -490,8 +490,10 @@ function orgListFixture(t) {
     Org: { create: async ({ aliasOrUsername: username }) => {
       calls.creates.push(username);
       return {
+        getOrgId: () => calls.hubId,
+        getUsername: () => username,
         refreshAuth: async () => { calls.refreshes.push(username); return behavior.get(username)?.(); },
-        getConnection: () => ({ query: async query => {
+        getConnection: () => ({ getApiVersion: () => "68.0", query: async query => {
           calls.queries.push({ username, query });
           return behavior.get(username)?.() ?? { records: [] };
         } })
@@ -706,4 +708,57 @@ test("metadata rejects unknown types with helpful suggestions before listing", a
   assert.equal(calls.lists.length, 0);
   await handlers.listMetadata({ types: ["Child"] });
   assert.equal(calls.lists.length, 1);
+});
+
+const sfCapture = name => JSON.parse(readFileSync(new URL(`./fixtures/sf-json/${name}.json`, import.meta.url), 'utf8'));
+test('raw org list preserves sf fields, enriches scratch rows, and excludes auth secrets', async t => {
+  const { sfEnvelope } = await import('../src/sf-json.mjs');
+  const f = orgListFixture(t);
+  const expected = sfCapture('org-list');
+  const { nonScratchOrgs, scratchOrgs } = expected.result;
+  const computed = ['accessToken', 'alias', 'lastUsed', 'isDefaultUsername', 'isDefaultDevHubUsername', 'defaultMarker', 'connectedStatus', 'signupUsername', 'createdBy', 'createdDate', 'devHubOrgId', 'devHubId', 'attributes', 'orgName', 'edition', 'status', 'isExpired', 'namespace'];
+  for (const entry of [...nonScratchOrgs, ...scratchOrgs]) {
+    f.fields.set(entry.username, { ...Object.fromEntries(Object.entries(entry).filter(([key]) => !computed.includes(key))), accessToken: 'access-secret', refreshToken: 'refresh-secret', clientSecret: 'client-secret', sfdxAuthUrl: 'force://secret' });
+    f.aliases.set(entry.username, [entry.alias]);
+    const file = join(f.home, '.sfdx', `${entry.username}.json`);
+    writeFileSync(file, '{}');
+    utimesSync(file, new Date(entry.lastUsed), new Date(entry.lastUsed));
+  }
+  f.defaults['target-dev-hub'] = nonScratchOrgs[0].username;
+  f.behavior.set(nonScratchOrgs[0].username, () => ({ records: scratchOrgs.map(row => ({ ScratchOrg: row.orgId.slice(0, 15), SignupUsername: row.signupUsername, CreatedBy: { Username: row.createdBy }, CreatedDate: row.createdDate, OrgName: row.orgName, Edition: row.edition, Status: row.status, ExpirationDate: row.expirationDate, Namespace: row.namespace, attributes: row.attributes })) }));
+  // The live hub supplies its own id; it is not a ScratchOrgInfo field.
+  f.calls.hubId = nonScratchOrgs[0].orgId;
+  const result = await f.handlers.orgList({ all: true, status: true, raw: true });
+  const actual = sfEnvelope('orgList', { status: 0, result });
+  assert.deepEqual(actual, expected);
+  assert.doesNotMatch(JSON.stringify(actual), /access-secret|refresh-secret|client-secret|force:\/\//);
+});
+
+test('raw apex expands library diagnostics into sf error data', async () => {
+  const expected = sfCapture('apex-compile-error');
+  const data = expected.data;
+  const modules = {
+    '@salesforce/core': { Org: { create: async () => ({ getConnection: () => ({}) }) } },
+    '@salesforce/kit': {},
+    '@salesforce/apex-node': { ExecuteService: class { async executeAnonymous() {
+      return { success: data.success, compiled: data.compiled, logs: data.logs, diagnostic: [{ lineNumber: data.line, columnNumber: data.column, compileProblem: data.compileProblem, exceptionMessage: data.exceptionMessage, exceptionStackTrace: data.exceptionStackTrace }] };
+    } } }
+  };
+  const handlers = createHandlers('unused', { home: '/nonexistent', load: name => modules[name] });
+  const { sfEnvelope } = await import('../src/sf-json.mjs');
+  const { stack, cause, ...envelope } = expected;
+  assert.deepEqual(sfEnvelope('apex', { status: 0, result: await handlers.apex({ org: 'scratch', body: 'bad', raw: true }) }), envelope);
+});
+
+for (const name of ['org-display-nonscratch', 'org-display-scratch']) test(`raw display handler: ${name}`, async t => {
+  const { sfEnvelope } = await import('../src/sf-json.mjs');
+  const f = orgListFixture(t);
+  const expected = sfCapture(name), row = expected.result;
+  f.fields.set(row.username, { orgId: row.id, username: row.username, instanceUrl: row.instanceUrl, instanceApiVersion: row.apiVersion, clientId: row.clientId, devHubUsername: row.devHubId,
+    accessToken: 'access-secret', refreshToken: 'refresh-secret', clientSecret: 'client-secret', sfdxAuthUrl: 'force://secret' });
+  f.aliases.set(row.username, [row.alias]);
+  if (row.devHubId) f.behavior.set(row.devHubId, () => ({ records: [{ Status: row.status, ExpirationDate: row.expirationDate, CreatedBy: { Username: row.createdBy }, Edition: row.edition, OrgName: row.orgName, CreatedDate: row.createdDate, SignupUsername: row.signupUsername }] }));
+  const result = await f.handlers.org({ org: row.username, raw: true });
+  assert.deepEqual(sfEnvelope('org', { status: 0, result }), expected);
+  assert.doesNotMatch(JSON.stringify(result), /access-secret|refresh-secret|client-secret|force:\/\//);
 });

@@ -8,8 +8,8 @@ selection, streaming lines, timestamp filter, output sizing),
 `src/discover/claude.mjs`, `src/discover/codex.mjs` and
 `src/discover/gemini.mjs` (readers), `src/discover/worker.mjs` (one worker thread
 per agent), the `discover` branch in `bin/sfd.mjs` (before the daemon switch),
-the `discover` entry in `COMMANDS` (`src/commands.mjs`), and `lex` and `rewrite`
-in `src/rewrite.mjs`. Tests: `test/discover.test.mjs` with fixtures in
+the `discover` entry in `COMMANDS` (`src/commands.mjs`), `lex` and `rewrite`
+in `src/rewrite.mjs`, and `split` in `src/shell.mjs` (segment boundaries). Tests: `test/discover.test.mjs` with fixtures in
 `test/fixtures/discover/`. `test/snippet.test.mjs` also excludes the discover
 line when it checks that help output is unchanged.
 

@@ -1,0 +1,65 @@
+{
+  "status": 0,
+  "result": {
+    "other": [
+      {
+        "accessToken": "[REDACTED] Use 'sf org auth show-access-token' to view",
+        "instanceUrl": "https://example-2-dev-ed.my.salesforce.com",
+        "orgId": "00DXX0000000005AAA",
+        "username": "user2@example.com",
+        "loginUrl": "https://login.salesforce.com",
+        "clientId": "PlatformCLI",
+        "isDevHub": false,
+        "instanceApiVersion": "68.0",
+        "instanceApiVersionLastRetrieved": "10/22/2026, 3:40:44 PM",
+        "name": "example LLC",
+        "instanceName": "USA1044",
+        "namespacePrefix": null,
+        "isSandbox": false,
+        "isScratch": false,
+        "trailExpirationDate": null,
+        "orgEdition": "Developer Edition",
+        "tracksSource": false,
+        "alias": "regular-org",
+        "isDefaultDevHubUsername": false,
+        "isDefaultUsername": false,
+        "lastUsed": "2026-10-22T22:41:14.022Z",
+        "connectedStatus": "Connected",
+        "defaultMarker": ""
+      }
+    ],
+    "sandboxes": [],
+    "nonScratchOrgs": [
+      {
+        "accessToken": "[REDACTED] Use 'sf org auth show-access-token' to view",
+        "instanceUrl": "https://example-2-dev-ed.my.salesforce.com",
+        "orgId": "00DXX0000000005AAA",
+        "username": "user2@example.com",
+        "loginUrl": "https://login.salesforce.com",
+        "clientId": "PlatformCLI",
+        "isDevHub": false,
+        "instanceApiVersion": "68.0",
+        "instanceApiVersionLastRetrieved": "10/22/2026, 3:40:44 PM",
+        "name": "example LLC",
+        "instanceName": "USA1044",
+        "namespacePrefix": null,
+        "isSandbox": false,
+        "isScratch": false,
+        "trailExpirationDate": null,
+        "orgEdition": "Developer Edition",
+        "tracksSource": false,
+        "alias": "regular-org",
+        "isDefaultDevHubUsername": false,
+        "isDefaultUsername": false,
+        "lastUsed": "2026-10-22T22:41:14.022Z",
+        "connectedStatus": "Connected",
+        "defaultMarker": ""
+      }
+    ],
+    "devHubs": [],
+    "scratchOrgs": []
+  },
+  "warnings": [
+    "Secrets are now hidden from 'sf org list' command output. Use the 'sf org auth' commands instead. As a temporary workaround, you can set SF_TEMP_SHOW_SECRETS=true to render these secrets. This workaround will be removed in an upcoming release."
+  ]
+}

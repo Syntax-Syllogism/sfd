@@ -1,0 +1,16 @@
+{
+  "status": 0,
+  "result": {
+    "id": "00DXX0000000005AAA",
+    "apiVersion": "68.0",
+    "accessToken": "[REDACTED] Use 'sf org auth show-access-token' to view",
+    "instanceUrl": "https://example-2-dev-ed.my.salesforce.com",
+    "username": "user2@example.com",
+    "clientId": "PlatformCLI",
+    "connectedStatus": "Connected",
+    "alias": "devHub"
+  },
+  "warnings": [
+    "Secrets are now hidden from 'sf org display' command output. Use the 'sf org auth' commands instead. As a temporary workaround, you can set SF_TEMP_SHOW_SECRETS=true to render these secrets. This workaround will be removed in an upcoming release."
+  ]
+}

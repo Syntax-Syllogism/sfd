@@ -1,0 +1,22 @@
+{
+  "name": "executeRuntimeFailure",
+  "message": "Execution failed at this code:\n\nSystem.MathException: Divide by 0",
+  "exitCode": 1,
+  "context": "Run",
+  "data": {
+    "success": false,
+    "compiled": true,
+    "compileProblem": "",
+    "exceptionMessage": "System.MathException: Divide by 0",
+    "exceptionStackTrace": "AnonymousBlock: line 1, column 1",
+    "line": "1",
+    "column": "1",
+    "logs": "68.0 APEX_CODE,DEBUG;APEX_PROFILING,INFO\nExecute Anonymous: Integer x = 1/0;\n17:54:06.19 (19447228)|USER_INFO|[EXTERNAL]|005XX0000000001|user1@example.com|(GMT-07:00) Pacific Daylight Time (America/Los_Angeles)|GMT-07:00\n17:54:06.19 (19474689)|EXECUTION_STARTED\n17:54:06.19 (19493669)|CODE_UNIT_STARTED|[EXTERNAL]|execute_anonymous_apex\n17:54:06.19 (19993322)|EXCEPTION_THROWN|[1]|System.MathException: Divide by 0\n17:54:06.19 (20274644)|FATAL_ERROR|System.MathException: Divide by 0\n\nAnonymousBlock: line 1, column 1\n17:54:06.20 (20306454)|CUMULATIVE_LIMIT_USAGE\n17:54:06.20 (20306454)|LIMIT_USAGE_FOR_NS|(default)|\n  Number of SOQL queries: 0 out of 100\n  Number of query rows: 0 out of 50000\n  Number of SOSL queries: 0 out of 20\n  Number of DML statements: 0 out of 150\n  Number of Publish Immediate DML: 0 out of 150\n  Number of DML rows: 0 out of 10000\n  Maximum CPU time: 0 out of 10000\n  Maximum heap size: 0 out of 10000000\n  Number of callouts: 0 out of 100\n  Number of Email Invocations: 0 out of 10\n  Number of future calls: 0 out of 50\n  Number of queueable jobs added to the queue: 0 out of 50\n  Number of Mobile Apex push calls: 0 out of 10\n\n17:54:06.20 (20306454)|CUMULATIVE_LIMIT_USAGE_END\n\n17:54:06.19 (20359844)|CODE_UNIT_FINISHED|execute_anonymous_apex\n17:54:06.19 (20369504)|EXECUTION_FINISHED\n"
+  },
+  "stack": "executeRuntimeFailure: Execution failed at this code:\n\nSystem.MathException: Divide by 0\n    at SfCommandError.from (file:///path/to/node_modules/@salesforce/cli/node_modules/@salesforce/sf-plugins-core/lib/SfCommandError.js:48:16)\n    at Run.catch (file:///path/to/node_modules/@salesforce/cli/node_modules/@salesforce/sf-plugins-core/lib/sfCommand.js:332:47)\n    at Run._run (/path/to/node_modules/@salesforce/cli/node_modules/@oclif/core/lib/command.js:187:29)\n    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)\n    at async Config.runCommand (/path/to/node_modules/@salesforce/cli/node_modules/@oclif/core/lib/config/config.js:422:25)\n    at async run (/path/to/node_modules/@salesforce/cli/node_modules/@oclif/core/lib/main.js:97:16)\n    at async file:///path/to/node_modules/@salesforce/cli/bin/run.js:15:1",
+  "cause": "undefined",
+  "warnings": [],
+  "code": "executeRuntimeFailure",
+  "status": 1,
+  "commandName": "Run"
+}

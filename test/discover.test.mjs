@@ -60,7 +60,7 @@ test("classifications use the rewrite engine, ignore mentions and handle shell w
     });
   }
   assert.equal(classify("sfd org").classification, "adopted");
-  assert.equal(classify("sf org display && sfd org").classification, "skipped");
+  assert.equal(classify("sf org display && sfd org").classification, "rewritable");
 });
 
 test("reports redact values from skip reasons before grouping", async t => {
@@ -153,7 +153,7 @@ test("aggregate includes medians, coverage and conservative savings", async t =>
   assert.equal(formatReport(report), [
     "sfd discover: 30d, 3 agents, 10 sf/sfdx calls in 3 sessions",
     "  rewritable now  4  (~0.1 min saved (2 samples); ~6 output tokens (3 samples))",
-    "  skipped         4  sf output is piped 2 · asynchronous tests need --wait or --synchronous 1 · unsupported flag --verbose 1",
+    "  skipped         4  sf output is piped or redirected without compatible JSON (unsupported redirection) 2 · asynchronous tests need --wait or --synchronous 1 · unsupported flag --verbose 1",
     "  not in sfd      2  force:org:list 1 · org create scratch 1 (legacy 1)",
     "  already sfd     3",
     "Top rewritable: data query 2 · org display 2",
@@ -219,4 +219,10 @@ test("CLI validates flags and reads fixtures locally without a daemon", async t 
   assert.equal(run("--help").status, 0);
   await assert.rejects(access(runtime));
   assert.equal(discoverOptions({ since: "12h" }, Date.parse("2026-10-22")).since.toISOString(), "2026-10-21T12:00:00.000Z");
+});
+
+
+test("list classification shares partial rewrites and fixed skip reasons", () => {
+  assert.equal(classify('S=$VAR; sf data query -q "$Q"; sf org display --json | jq .').classification, 'rewritable');
+  assert.equal(classify('sf org display --json 2>&1 | jq PRIVATE').reason, 'stderr merged into consumed output');
 });
