@@ -10,6 +10,7 @@ Source: `src/hooks.mjs` (adapters, settings install and uninstall, `check`),
 segment splitting) and `src/sf-json.mjs` (sf-compatible JSON envelopes). Tests:
 `test/hooks.test.mjs`, `test/rewrite.test.mjs`, `test/shell.test.mjs` and
 `test/sf-json.test.mjs`, with captures in `test/fixtures/sf-json/`.
+`test/powershell.test.mjs` checks real Windows PowerShell argument passing.
 
 ## Install
 
@@ -64,8 +65,53 @@ sfd hook check 'sf data query -q "SELECT Id FROM Account" -o dev --json'
 
 `check` runs the same rewriter as the adapters. It exits 0 for a rewrite and 1
 for a skip, printing the skip reason. It never contacts the daemon.
+An invalid `--shell` option exits 2.
+
+## Windows and PowerShell
+
+Gemini CLI uses PowerShell on native Windows, so its adapter selects PowerShell
+mode on `win32` and POSIX mode elsewhere. Claude Code's `Bash` tool uses Git
+Bash on Windows and keeps POSIX mode; its `PowerShell` tool is not matched.
+[Codex supports native PowerShell](https://learn.chatgpt.com/docs/windows/windows-sandbox),
+but the hook payload does not identify the configured shell. Its Windows
+adapter therefore skips rewriting unless you set `SFD_HOOK_SHELL`.
+
+Set `SFD_HOOK_SHELL=posix` or `SFD_HOOK_SHELL=powershell` in the agent's
+environment to override selection for any adapter. An invalid value, including
+an empty value, disables rewriting. For Codex running in WSL, the platform is
+Linux and the default is POSIX. If you use another shell on native Windows,
+choose the matching override; `cmd.exe` is not supported.
+
+PowerShell mode supports one plain `sf` command from the table below. It keeps
+backslashes literal and doubles single quotes inside single-quoted output:
+
+```bash
+sfd hook check --shell powershell "sf project deploy start -d force-app\\main\\default"
+# → sfd deploy -d 'force-app\main\default'
+```
+
+Pass the command as one string, quoted for the shell running `check`.
+`check` defaults to `SFD_HOOK_SHELL`, or POSIX when unset; it does not infer an
+agent or platform. An explicit `--shell` overrides the environment.
+
+This mode deliberately skips lists, pipelines, redirects, comments, variables,
+subexpressions, splatting, script blocks and backtick escapes outside verbatim
+single quotes. Commas and operators inside quoted values are literal. Double
+quotes accept only strings without `$` or backticks. Mixed tokens such as
+`--query="SELECT Id"`, smart quotes, stop-parsing `--%`, and multiline commands
+are skipped (one final newline is accepted). Use `-q "SELECT Id"` instead of
+joining a flag to a quoted value.
+
+Empty output arguments, values containing a double quote, and values ending
+in a backslash are skipped because native argument passing differs between
+PowerShell 5.1 and 7. `apex run` requires `-f` / `--file`. PowerShell mode never
+adds `--sf-json`; `--json` follows the unconsumed mapping in the table.
+Unsupported input stays with `sf` unchanged.
 
 ## Supported rewrites
+
+The shell lists, pipelines, environment assignments and redirections described
+below apply to POSIX mode. PowerShell uses the subset above.
 
 | `sf` command | `sfd` command | Notes |
 | --- | --- | --- |
@@ -143,11 +189,15 @@ The rewriter skips these, and the agent runs the original command:
    command words, the `sfd` subcommand, and a flag table. Each flag is
    `[sf names, sfd flag or "" to drop, takes a value, repeatable]`. Flags not
    in the table are skipped. Required-flag and value checks live in `mapArgs`.
+   PowerShell mode uses the same entries. `mapArgs` gets a value quoter from
+   its caller (`quote` for POSIX, `quotePowerShell` for PowerShell), so a new
+   mapping is available in both modes unless its values cannot be quoted safely.
 2. If the `sfd` subcommand is new, add it to `bin/sfd.mjs` first (`options`
    and the request switch). Then add its entry to `COMMANDS` in
    `src/commands.mjs`, which generates its `--help` line and its agent snippet
    line.
-3. Add rewrite cases to `test/rewrite.test.mjs`. Add adapter cases to
+3. Add rewrite cases to `test/rewrite.test.mjs`, including PowerShell cases
+   beside the POSIX ones. Add adapter cases to
    `test/hooks.test.mjs` if the response shape changes. If the `--sf-json`
    output of a command changes, update `src/sf-json.mjs` and its cases in
    `test/sf-json.test.mjs`, using the captures in `test/fixtures/sf-json/`.

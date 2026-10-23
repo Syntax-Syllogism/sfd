@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { handle, editSettings } from "../src/hooks.mjs";
+import { handle, editSettings, hookShell } from "../src/hooks.mjs";
 
 const cli = fileURLToPath(new URL("../bin/sfd.mjs", import.meta.url));
 const configs = {
@@ -21,7 +21,7 @@ function temporary(t) {
 function run(args, input, dir, env = {}) {
   return spawnSync(process.execPath, [cli, "hook", ...args], {
     input, encoding: "utf8", cwd: dir, timeout: 5000,
-    env: { ...process.env, HOME: dir, SFD_RUNTIME_DIR: join(dir, "runtime"), SFD_HOOK_DISABLE: "", ...env }
+    env: { ...process.env, HOME: dir, SFD_RUNTIME_DIR: join(dir, "runtime"), SFD_HOOK_DISABLE: "", SFD_HOOK_SHELL: "posix", ...env }
   });
 }
 for (const [agent, config] of Object.entries(configs)) {
@@ -31,7 +31,7 @@ for (const [agent, config] of Object.entries(configs)) {
     hookSpecificOutput: { hookEventName: "PreToolUse", ...(agent === "codex" ? { permissionDecision: "allow" } : {}), permissionDecisionReason: "sfd: warm daemon, ~0.3 s", updatedInput }
   };
   test(`${agent}: golden response and no opinion inputs`, () => {
-    assert.deepEqual(JSON.parse(handle(agent, JSON.stringify(input), {})), expected);
+    assert.deepEqual(JSON.parse(handle(agent, JSON.stringify(input), {}, "linux")), expected);
     for (const malformed of ["{", "null", "[]", "1", '"text"']) assert.equal(handle(agent, malformed, {}), "");
     for (const change of [{ tool_name: "read_file" }, { tool_input: { command: "sfd org" } }, { tool_input: null }, { tool_input: { command: 42 } }, { hook_event_name: "AfterTool" }]) {
       assert.equal(handle(agent, JSON.stringify({ ...input, ...change }), {}), "");
@@ -127,6 +127,56 @@ for (const [agent, config] of Object.entries(configs)) {
   });
 }
 test("unknown agents have no opinion", () => assert.equal(handle("unknown", "{}"), ""));
+test("shell selection covers agents, platforms and explicit overrides", () => {
+  for (const agent of Object.keys(configs)) for (const platform of ["linux", "darwin", "win32"]) {
+    const expected = platform !== "win32" || agent === "claude" ? "posix" : agent === "gemini" ? "powershell" : null;
+    assert.equal(hookShell(agent, {}, platform), expected, `${agent}/${platform}`);
+    for (const shell of ["posix", "powershell", "invalid", ""]) {
+      assert.equal(hookShell(agent, { SFD_HOOK_SHELL: shell }, platform), ["posix", "powershell"].includes(shell) ? shell : null);
+    }
+  }
+  assert.equal(hookShell("check", {}, "win32"), "posix");
+});
+test("Windows adapters quote for the selected shell and preserve tool input", () => {
+  const command = `sf data query -q "SELECT Id WHERE Name = 'x'" --json`;
+  for (const agent of Object.keys(configs)) {
+    const input = JSON.stringify({ tool_name: configs[agent].tool, tool_input: { command, timeout: 5000 } });
+    const response = handle(agent, input, {}, "win32");
+    if (agent === "codex") assert.equal(response, "");
+    else {
+      const output = JSON.parse(response).hookSpecificOutput;
+      assert.deepEqual(output.tool_input ?? output.updatedInput, { timeout: 5000, command: agent === "gemini" ? "sfd query 'SELECT Id WHERE Name = ''x'''" : "sfd query 'SELECT Id WHERE Name = '\\''x'\\'''" });
+    }
+    assert.equal(handle(agent, input, { SFD_HOOK_SHELL: "invalid" }, "win32"), "");
+    const output = JSON.parse(handle(agent, input, { SFD_HOOK_SHELL: "powershell" }, "win32")).hookSpecificOutput;
+    assert.equal((output.tool_input ?? output.updatedInput).command, "sfd query 'SELECT Id WHERE Name = ''x'''");
+  }
+  const input = JSON.stringify({ tool_name: "PowerShell", tool_input: { command } });
+  assert.equal(handle("claude", input, {}, "win32"), "");
+});
+test("check accepts a shell option, defaults to the environment and rejects invalid options", t => {
+  const dir = temporary(t);
+  const command = `sf data query -q "SELECT Id WHERE Name = 'x'" --json`;
+  for (const args of [["check", "--shell", "powershell", command], ["check", "--shell=powershell", command], ["check", command]]) {
+    const result = run(args, "", dir, { SFD_HOOK_SHELL: "powershell" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "→ sfd query 'SELECT Id WHERE Name = ''x'''\n");
+  }
+  const overridden = run(["check", "--shell", "posix", command], "", dir, { SFD_HOOK_SHELL: "invalid" });
+  assert.equal(overridden.status, 0, overridden.stderr);
+  assert.equal(overridden.stdout, "→ sfd query 'SELECT Id WHERE Name = '\\''x'\\'''\n");
+  for (const args of [["check", "--shell", "cmd", command], ["check", "--shell"], ["check", "--shell="]]) {
+    const result = run(args, "", dir);
+    assert.equal(result.status, 2, result.stderr);
+    assert.equal(result.stdout, "");
+  }
+  const invalidEnv = run(["check", command], "", dir, { SFD_HOOK_SHELL: "invalid" });
+  assert.equal(invalidEnv.status, 1);
+  assert.match(invalidEnv.stdout, /invalid SFD_HOOK_SHELL/);
+  const pipeline = run(["check", "--shell", "powershell", "sf org display --json | jq ."], "", dir);
+  assert.equal(pipeline.status, 1);
+  assert.equal(existsSync(join(dir, "runtime")), false);
+});
 test("hook help succeeds without starting a daemon", t => {
   const dir = temporary(t);
   for (const flag of ["--help", "-h"]) {

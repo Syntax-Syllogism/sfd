@@ -171,6 +171,7 @@ filtered output format and `test --logs` behavior are in
 | `SFD_RUNTIME_DIR` | Socket, log and pid directory (on Windows, log and pid only; the pipe name is derived from it). |
 | `SFD_SF_ROOT` | `@salesforce/cli` install to load libraries from, instead of the `sf` on `PATH`. |
 | `SFD_HANDLERS_MODULE` | Test seam: stub handlers module used by the CLI tests. |
+| `SFD_HOOK_SHELL` | Force hook parsing and quoting to `posix` or `powershell`. Invalid values disable rewriting. Gemini defaults to PowerShell on Windows; Codex on native Windows requires an explicit override. |
 
 ## Testing
 
@@ -220,9 +221,14 @@ with `sfd hook check '<sf command>'`. Query result format `-r csv` (or
 adapter details, skip rules and the `SFD_HOOK_DISABLE=1` switch are in
 [docs/agent-hooks.md](docs/agent-hooks.md).
 
+On Windows, Gemini uses a conservative PowerShell mode; Codex needs
+`SFD_HOOK_SHELL=powershell` for PowerShell sessions. Preview it with
+`sfd hook check --shell powershell '<sf command>'`. See
+[Windows and PowerShell](docs/agent-hooks.md#windows-and-powershell).
+
 ## Using sfd with coding agents
 
-The rewrite hook supports shell lists and pipelines. Eligible piped or redirected
+In POSIX mode, the rewrite hook supports shell lists and pipelines. Eligible piped or redirected
 `sf --json` calls use `--sf-json` so jq consumers retain sf's result shape.
 
 `sfd discover` scans local Claude Code, Codex CLI and Gemini CLI transcripts for

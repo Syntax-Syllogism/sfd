@@ -3,6 +3,45 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { rewrite } from "../src/rewrite.mjs";
 
+const powershell = { shell: "powershell" };
+const reportedQuery = "SELECT Id, DeveloperName FROM CustomObject WHERE DeveloperName LIKE '%ABC%'";
+for (const [input, expected] of [
+  [`sf data query -o myOrg -q "${reportedQuery}" --use-tooling-api --json`, `sfd query 'SELECT Id, DeveloperName FROM CustomObject WHERE DeveloperName LIKE ''%ABC%''' -o 'myOrg' --tooling`],
+  ["sf data query -q 'SELECT Id WHERE Name = ''O''''Brien'''", "sfd query 'SELECT Id WHERE Name = ''O''''Brien'''"],
+  [String.raw`sf project deploy start -d force-app\main\default`, String.raw`sfd deploy -d 'force-app\main\default'`],
+  ["sf apex run -f 'code with spaces.apex'", "sfd apex -f 'code with spaces.apex'"],
+  ["sf data query -q 'SELECT $x, `x`; | & < > @ # () {}'", "sfd query 'SELECT $x, `x`; | & < > @ # () {}'"],
+  ["sf data query -q q -r csv --json", "sfd query 'q' --csv"],
+  ["sf org list --json", "sfd org list --json --status"],
+  ["sf org display --target-org=dev", "sfd org -o 'dev'"],
+  [" \tsf org display\r\n", "sfd org"],
+  ["sf apex run -f src/*.apex", "sfd apex -f 'src/*.apex'"],
+]) test(`PowerShell rewrite: ${input}`, () => {
+  assert.deepEqual(rewrite(input, powershell), { command: expected, reason: "sfd: warm daemon, ~0.3 s", rewritten: 1, skipped: [] });
+});
+
+for (const input of [
+  "sf org display | cat", "sf org display; echo hi", "sf org display && echo hi", "sf org display || echo hi",
+  "sf org display > out", "sf org display 2>$null", "sf org display < input", "& sf org display",
+  "sf org display -o $org", "sf org display -o `org", "sf org display -o @(a)", "sf org display -o a,b",
+  "sf org display # comment", "sf org display -o {a}", "sf org display --% -o dev",
+  ...Array.from("‘’‚‛“”„", q => `sf org display -o ${q}org${q}`),
+  'sf org display -o \'a"b\'', String.raw`sf project deploy start -d 'path with spaces\'`,
+  "sf org display -o ''", 'sf org display -o ""', 'sf org display -o "a$var"', 'sf org display -o "a`b"',
+  'sf data query --query="SELECT Id"', "sf org display -o a'b'", "sf org display -o 'a'b", 'sf org display -o "a""b"',
+  "sf org display -o 'unclosed", "sf org display\necho hi", "sf org display\n\n", "sf data query -q 'SELECT\nId'",
+  "sf.cmd org display", "./sf org display", "'sf' org display", "sfdx org display", "SF_TARGET_ORG=x sf org display",
+  "sf apex run", "sf apex run -o dev --json", "sf org display -o a!b", "sf data query", "sf org display --verbose",
+  'sf apex run test -n A', 'sf data query -q q --json | jq .',
+]) test(`PowerShell skip: ${input}`, () => assert.ok(rewrite(input, powershell).skip, input));
+
+test("explicit POSIX mode is identical to the default and unknown shells skip", () => {
+  for (const input of ['sf data query -q "SELECT Id WHERE Name = \'x\'"', 'sf org display --json | jq .']) {
+    assert.deepEqual(rewrite(input, { shell: "posix" }), rewrite(input));
+  }
+  assert.ok(rewrite("sf org display", { shell: "cmd" }).skip);
+});
+
 const rewrites = [
   ["sf org list metadata-types -o dev --json", "sfd list-metadata-types -o 'dev'"],
   ["sf org list metadata -m Report --folder Public -o dev", "sfd list-metadata -m 'Report' --folder 'Public' -o 'dev'"],

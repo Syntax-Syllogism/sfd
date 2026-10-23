@@ -62,7 +62,7 @@ const mappings = [
   { sf: "org display", sfd: "org", flags: [org, json] }
 ];
 
-function mapArgs(argv) {
+function mapArgs(argv, quoteValue) {
   const mapping = mappings.find(m => m.sf.split(" ").every((v, i) => argv[i] === v));
   if (!mapping) return skip("unsupported sf command");
   const args = argv.slice(mapping.sf.split(" ").length);
@@ -94,7 +94,7 @@ function mapArgs(argv) {
     }
     if (key === "w" && (!Number.isFinite(Number(values[0])) || Number(values[0]) <= 0)) return skip("wait must be positive");
     if (target) {
-      if (takesValue) for (const v of values) output.push(target, quote(v));
+      if (takesValue) for (const v of values) output.push(target, quoteValue(v));
       else output.push(target);
     }
   }
@@ -121,14 +121,64 @@ function mapArgs(argv) {
   const positional = logTarget ? [logTarget] : mapping.required ? seen.get(mapping.required) : positionals;
   // Protect sfd's own option parser from values that could be interpreted as options.
   if (positional.some(v => v.startsWith("-"))) return skip("unsupported positional value");
-  return { command: ["sfd", mapping.sfd, ...positional.map(quote), ...output].join(" "), apex: mapping.sfd === "apex", subcommand: mapping.sfd, json: seen.has("json"), format: seen.has("r") };
+  return { command: ["sfd", mapping.sfd, ...positional.map(quoteValue), ...output].join(" "), apex: mapping.sfd === "apex", subcommand: mapping.sfd, json: seen.has("json"), format: seen.has("r"), file: seen.has("f") };
 }
 
-export function rewrite(command) {
+export function rewrite(command, { shell = "posix" } = {}) {
   if (typeof command !== "string" || !command.trim()) return skip("empty command");
   try {
-    return rewriteShell(command);
+    if (shell === "powershell") return rewritePowerShell(command);
+    if (shell === "posix") return rewriteShell(command);
+    return skip("unsupported shell");
   } catch (error) { return skip(error.message); }
+}
+
+function lexPowerShell(source) {
+  const words = [];
+  let i = 0;
+  while (i < source.length) {
+    if (/[ \t]/.test(source[i])) { i++; continue; }
+    let value = "";
+    const delimiter = source[i];
+    if (delimiter === "'" || delimiter === '"') {
+      i++;
+      let closed = false;
+      while (i < source.length) {
+        const c = source[i++];
+        if (c === delimiter) {
+          if (delimiter === "'" && source[i] === "'") { value += "'"; i++; continue; }
+          closed = true; break;
+        }
+        if (delimiter === '"' && /[$`]/.test(c)) throw Error("PowerShell expansion or escape");
+        value += c;
+      }
+      if (!closed) throw Error("unclosed PowerShell quote");
+    } else {
+      while (i < source.length && !/[ \t]/.test(source[i])) {
+        if (!/[A-Za-z0-9_\-.:=\\/+%*?~\[\]]/.test(source[i])) throw Error("unsupported PowerShell syntax");
+        value += source[i++];
+      }
+    }
+    if (i < source.length && !/[ \t]/.test(source[i])) throw Error("mixed PowerShell token");
+    words.push(value);
+  }
+  return words;
+}
+
+function rewritePowerShell(command) {
+  // Keep a strict subset that passes the same values through PowerShell 5.1 and 7.
+  const source = command.replace(/^[ \t]+/, "").replace(/[ \t]*(?:\r?\n)?[ \t]*$/, "");
+  if (/[\r\n\x00-\x08\x0b-\x1f\u2018-\u201e]/.test(source) || source.includes("--%")) return skip("unsupported PowerShell syntax");
+  if (!/^sf(?:[ \t]|$)/.test(source)) return skip("not a plain sf invocation");
+  const words = lexPowerShell(source);
+  const quotePowerShell = value => {
+    if (!value || value.includes('"') || value.endsWith("\\")) throw Error("unsafe PowerShell native argument");
+    return `'${value.replaceAll("'", "''")}'`;
+  };
+  const mapped = mapArgs(words.slice(1), quotePowerShell);
+  if (mapped.skip) return mapped;
+  if (mapped.apex && !mapped.file) return skip("PowerShell apex run needs a file");
+  return { command: mapped.command, reason: "sfd: warm daemon, ~0.3 s", rewritten: 1, skipped: [] };
 }
 
 function rewriteElement(text, consumed, stdin, whole) {
@@ -168,7 +218,7 @@ function rewriteElement(text, consumed, stdin, whole) {
       i++;
     } else return skip("unsupported redirection");
   }
-  const mapped = mapArgs(words);
+  const mapped = mapArgs(words, quote);
   if (mapped.skip) return mapped;
   if ((stdin || heredoc) && !mapped.apex) return skip("stdin is supported only for apex run");
   if (consumed) {

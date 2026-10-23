@@ -5,7 +5,7 @@ import { parseArgs } from "node:util";
 import { rewrite } from "./rewrite.mjs";
 import { UsageError } from "./usage-error.mjs";
 
-const USAGE = "Usage: sfd hook claude|codex|gemini|check <command>|install|uninstall --agent <agent> [--project]";
+const USAGE = "Usage: sfd hook claude|codex|gemini|check [--shell posix|powershell] <command>|install|uninstall --agent <agent> [--project]";
 
 const agents = {
   claude: { directory: ".claude", file: "settings.json", event: "PreToolUse", tool: "Bash" },
@@ -13,7 +13,13 @@ const agents = {
   gemini: { directory: ".gemini", file: "settings.json", event: "BeforeTool", tool: "run_shell_command" }
 };
 
-export function handle(agent, inputJson, env = process.env) {
+export function hookShell(agent, env = process.env, platform = process.platform) {
+  if (env.SFD_HOOK_SHELL !== undefined) return ["posix", "powershell"].includes(env.SFD_HOOK_SHELL) ? env.SFD_HOOK_SHELL : null;
+  if (platform === "win32" && agent === "codex") return null;
+  return platform === "win32" && agent === "gemini" ? "powershell" : "posix";
+}
+
+export function handle(agent, inputJson, env = process.env, platform = process.platform) {
   try {
     if (env.SFD_HOOK_DISABLE === "1") return "";
     const config = agents[agent];
@@ -21,7 +27,9 @@ export function handle(agent, inputJson, env = process.env) {
     const input = JSON.parse(inputJson);
     if (input?.tool_name !== config.tool || (input.hook_event_name && input.hook_event_name !== config.event)) return "";
     if (!input.tool_input || typeof input.tool_input.command !== "string") return "";
-    const result = rewrite(input.tool_input.command);
+    const shell = hookShell(agent, env, platform);
+    if (shell === null) return "";
+    const result = rewrite(input.tool_input.command, { shell });
     if (result.skip) return "";
     const updatedInput = { ...input.tool_input, command: result.command };
     if (agent === "gemini") return JSON.stringify({ hookSpecificOutput: { tool_input: updatedInput } });
@@ -87,7 +95,14 @@ export function runHook(argv) {
     return 0;
   }
   if (action === "check") {
-    const result = process.env.SFD_HOOK_DISABLE === "1" ? { skip: "SFD_HOOK_DISABLE=1" } : rewrite(args.join(" "));
+    let shell = hookShell("check");
+    if (args[0] === "--shell" || args[0]?.startsWith("--shell=")) {
+      const flag = args.shift();
+      shell = flag === "--shell" ? args.shift() : flag.slice("--shell=".length);
+      if (!["posix", "powershell"].includes(shell)) throw new UsageError("Expected --shell posix|powershell");
+    }
+    const result = process.env.SFD_HOOK_DISABLE === "1" ? { skip: "SFD_HOOK_DISABLE=1" }
+      : shell === null ? { skip: "invalid SFD_HOOK_SHELL" } : rewrite(args.join(" "), { shell });
     process.stdout.write(result.skip ? `skip: ${result.skip}\n` : `→ ${result.command}\n`);
     return result.skip ? 1 : 0;
   }
