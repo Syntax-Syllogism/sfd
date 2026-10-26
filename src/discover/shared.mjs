@@ -17,7 +17,7 @@ export async function* files(root, extension, since, stats) {
   for (const entry of entries) {
     const path = join(root, entry.name);
     if (entry.isDirectory()) yield* files(path, extension, since, stats);
-    else if (entry.isFile() && entry.name.endsWith(extension)) {
+    else if (entry.isFile() && [extension].flat().some(suffix => entry.name.endsWith(suffix))) {
       try {
         if ((await stat(path)).mtimeMs >= Number(since)) yield path;
       } catch { count(stats, "unreadableFiles"); }

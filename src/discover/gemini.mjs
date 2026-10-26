@@ -1,15 +1,13 @@
 import { readFile } from "node:fs/promises";
 import { join, basename, dirname } from "node:path";
-import { files, matches, candidate, count, outputChars } from "./shared.mjs";
+import { files, lines, matches, candidate, count, outputChars } from "./shared.mjs";
 
 export async function* read(options) {
   const { home, since = new Date(0), stats } = options;
-  for await (const file of files(join(home, ".gemini/tmp"), ".json", since, stats)) {
+  for await (const file of files(join(home, ".gemini/tmp"), [".json", ".jsonl"], since, stats)) {
     if (basename(dirname(file)) !== "chats" && basename(file) !== "logs.json") continue;
-    let document;
-    // Gemini persists a JSON document, rather than a JSONL stream.
-    try { document = JSON.parse(await readFile(file, "utf8")); }
-    catch (error) { count(stats, error instanceof SyntaxError ? "malformedEntries" : "unreadableFiles"); continue; }
+    const document = file.endsWith(".jsonl") ? await session(file, stats) : await legacy(file, stats);
+    if (document === undefined) continue;
     const messages = Array.isArray(document) ? document : document?.messages;
     if (!Array.isArray(messages)) { count(stats, "ignoredEntries"); continue; }
     for (const message of messages) {
@@ -29,4 +27,30 @@ export async function* read(options) {
       }
     }
   }
+}
+
+// Older Gemini CLI versions persist one JSON document per session.
+async function legacy(file, stats) {
+  try { return JSON.parse(await readFile(file, "utf8")); }
+  catch (error) { count(stats, error instanceof SyntaxError ? "malformedEntries" : "unreadableFiles"); }
+}
+
+// Current versions append JSONL: a metadata line, message records keyed by `id`
+// (re-appended as tool calls complete, so the last copy wins), `$set` metadata
+// patches that may replace `messages`, and `$rewindTo` markers. Rewinds and
+// replacements keep earlier messages, because their shell calls still ran.
+async function session(file, stats) {
+  const document = {};
+  const messages = new Map();
+  const merge = ({ messages: listed, ...metadata }) => {
+    if (Array.isArray(listed)) for (const message of listed) if (typeof message?.id === "string") messages.set(message.id, message);
+    Object.assign(document, metadata);
+  };
+  for await (const entry of lines(file, stats)) {
+    if (typeof entry?.id === "string") messages.set(entry.id, entry);
+    else if (entry?.$set && typeof entry.$set === "object") merge(entry.$set);
+    else if (typeof entry?.sessionId === "string") merge(entry);
+    else if (typeof entry?.$rewindTo !== "string") count(stats, "ignoredEntries");
+  }
+  return { ...document, messages: [...messages.values()] };
 }

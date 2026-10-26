@@ -184,6 +184,35 @@ test("missing stores, unknown shapes and malformed Gemini documents are harmless
   assert.equal((await discover({ home: join(home, "missing") })).sfCalls, 0);
 });
 
+test("Gemini JSONL sessions use the last copy of each message and keep rewound calls", async t => {
+  const { home, paths } = await fixture(t);
+  const file = join(home, ".gemini/tmp/project/chats/session-2026-10-21T12-00-abcd.jsonl");
+  await mkdir(resolve(file, ".."), { recursive: true });
+  const shell = (command, result) => ({ name: "run_shell_command", args: { command }, ...(result === undefined ? {} : { result }) });
+  const message = (id, toolCalls) => ({ id, timestamp: "2026-10-21T12:00:00Z", type: "gemini", content: "", toolCalls });
+  await writeFile(file, [
+    { sessionId: "s", projectHash: "h", startTime: "2026-10-21T12:00:00Z", cwd: "/work/app" },
+    { id: "u", timestamp: "2026-10-21T12:00:00Z", type: "user", content: [{ text: "hi" }] },
+    message("a", [shell("sf org display")]),
+    { $set: { lastUpdated: "2026-10-21T12:00:01Z" } },
+    message("a", [shell("sf org display", "abcdef")]),
+    message("b", [shell("sfd org")]),
+    { $rewindTo: "b" },
+    { $set: { messages: [message("a", [shell("sf org display", "abcdef")])] } },
+    message("c", [shell("sf data query -q 'SELECT Id FROM Account'")]),
+    { future: true }
+  ].map(entry => JSON.stringify(entry)).concat("{broken").join("\n"));
+  await utimes(file, new Date("2026-10-22"), new Date("2026-10-22"));
+  await rm(paths.gemini);
+  const stats = {};
+  const records = await collect(gemini({ home, since, stats }));
+  assert.deepEqual(records.map(record => record.command), ["sf org display", "sfd org", "sf data query -q 'SELECT Id FROM Account'"]);
+  assert.equal(records[0].outputChars, 6);
+  assert.ok(records.every(record => record.cwd === "/work/app" && record.session === file));
+  assert.equal(stats.malformedEntries, 1);
+  assert.ok(stats.ignoredEntries >= 2, "unknown record and user message");
+});
+
 test("Codex cmd arguments, argv, missing results and malformed arguments", async t => {
   const { home, paths } = await fixture(t);
   const entry = payload => JSON.stringify({ type: "response_item", timestamp: "2026-10-21", payload });

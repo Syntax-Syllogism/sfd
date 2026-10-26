@@ -45,7 +45,7 @@ the transcript file path. Missing stores are treated as empty.
 | --- | --- | --- | --- | --- |
 | Claude Code | `~/.claude/projects/**/*.jsonl` | `tool_use` with `name: "Bash"` and a string `input.command` | Result line timestamp minus call line timestamp, paired by `id` and `tool_use_id` | `tool_result.content` length; a non-string value is measured as its JSON text |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | `response_item` `function_call` named `shell`, `shell_command` or `exec_command`, with JSON `arguments` | Output line timestamp minus call line timestamp, paired by `call_id` | `function_call_output.output` length |
-| Gemini CLI | `~/.gemini/tmp/**/chats/*.json` and `~/.gemini/tmp/**/logs.json` | `messages[].toolCalls[]` named `run_shell_command` with `args.command` | None today. The reader sets no duration | `toolCalls[].result` length |
+| Gemini CLI | `~/.gemini/tmp/**/chats/*.jsonl`, `~/.gemini/tmp/**/chats/*.json` and `~/.gemini/tmp/**/logs.json` | `messages[].toolCalls[]` named `run_shell_command` with `args.command` | None today. The reader sets no duration | `toolCalls[].result` length |
 
 - **Claude:** A call with no matching result is still yielded, without a
   duration or output size. Only calls that mention `sf`, `sfd` or `sfdx` are
@@ -56,11 +56,18 @@ the transcript file path. Missing stores are treated as empty.
   or the last `cwd` seen in a `session_meta` or `turn_context` line. Custom tools,
   including JavaScript `exec` tools, are ignored, so `sf` calls made through them
   are not counted.
-- **Gemini:** The file is read whole and may be a bare array or an object with
-  `messages`. The timestamp is `toolCalls[].timestamp`, falling back to the
-  message timestamp. The working directory is `args.directory`, then the message
-  `cwd`, then the document `cwd`. Gemini's formats vary, so only the shapes above
-  are supported. A `logs.json` with only user messages has no shell calls.
+- **Gemini:** Current sessions are JSONL: a metadata line, message records
+  keyed by `id`, `$set` metadata patches and `$rewindTo` markers. A message
+  re-appended under the same `id` (for example once a tool call has its result)
+  replaces the earlier copy, and messages listed in `$set.messages` are merged
+  by `id`. Rewinds and `$set.messages` replacements do not drop earlier
+  messages, because their shell calls still ran. Older `.json` sessions are read
+  whole and may be a bare array or an object with `messages`. The timestamp is
+  `toolCalls[].timestamp`, falling back to the message timestamp. The working
+  directory is `args.directory`, then the message `cwd`, then the session `cwd`
+  (from the JSON document, or the JSONL metadata and `$set` lines). Gemini's
+  formats vary, so only the shapes above are supported. A `logs.json` with only
+  user messages has no shell calls.
 
 ### Selection and time filter
 
