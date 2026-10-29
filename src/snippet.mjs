@@ -6,7 +6,7 @@ const END = "<!-- sfd:end -->";
 export function snippet() {
   const lines = [];
   let previousGroup;
-  for (const { name, args, summary, agentTip, agentGroup } of COMMANDS) {
+  for (const { name, args, summary, agentTip, agentGroup } of COMMANDS.filter(command => command.name !== "help")) {
     const tip = agentTip ?? `${args}: ${summary.replaceAll("\n", " ")}`;
     const separator = tip.indexOf(": ");
     if (separator === -1) throw new Error(`Invalid agentTip for ${name}: expected ": " separator`);
@@ -20,7 +20,7 @@ export function snippet() {
     START,
     'Prefer `sfd` (warm Salesforce daemon, ~0.2 s/call, compact output) over `sf`:',
     ...lines,
-    'Add `-o <alias>` as with `sf`. Exit: 0 ok, 1 operation failed, 2 usage, 3 daemon. For anything else use `sf … --json`; pipe through `jq` for a few fields.',
+    'Run `sfd help <command>` for full documentation. Add `-o <alias>` as with `sf`. Exit: 0 ok, 1 operation failed, 2 usage, 3 daemon. For anything else use `sf … --json`; pipe through `jq` for a few fields.',
     END
   ].join("\n");
 }

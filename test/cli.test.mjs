@@ -2,10 +2,12 @@ import { socketPath } from '../src/paths.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { COMMANDS } from "../src/commands.mjs";
+import { VERSION } from "../src/version.mjs";
 
 const bin = fileURLToPath(new URL("../bin/sfd.mjs", import.meta.url));
 const runtime = mkdtempSync(join(tmpdir(), "sfd-cli-"));
@@ -22,6 +24,85 @@ const env = {
 const sfd = (args, input) => spawnSync(process.execPath, [bin, ...args], { env, input, encoding: "utf8" });
 
 test.after(() => sfd(["stop"]));
+
+test("version is printed without starting the daemon", () => {
+  const result = sfd(["--version", "query", "ignored", "--sf-json"]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, `sfd ${VERSION}\n`, JSON.stringify(result));
+  assert.equal(result.stderr, "");
+  assert.equal(existsSync(join(runtime, "sfd.sock")), false);
+  assert.equal(existsSync(join(runtime, "sfd.pid")), false);
+});
+
+test("help lists commands and guides and renders command manuals without starting the daemon", () => {
+  for (const args of [["help"], ["help", "-a"], ["help", "--all"], ["help", "-g"], ["help", "--guides"], ["help", "logs", "get"], ["help", "agent-hooks"], ["help", "--help"]]) {
+    const result = sfd(args);
+    assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}`);
+    assert.equal(result.stderr, "", args.join(" "));
+  }
+  const all = sfd(["help"]);
+  assert.match(all.stdout, /Commands:/);
+  assert.match(all.stdout, /Guides:/);
+  assert.match(all.stdout, /agent-hooks/);
+  const guides = sfd(["help", "-g"]);
+  assert.doesNotMatch(guides.stdout, /Commands:/);
+  assert.match(guides.stdout, /debug-logs/);
+  const logs = sfd(["help", "logs", "get"]);
+  assert.match(logs.stdout, /Filtered output/);
+  assert.match(logs.stdout, /Tips for agents/);
+  const guide = sfd(["help", "agent-hooks"]);
+  assert.match(guide.stdout, /^# Agent hooks/m);
+  assert.match(sfd(["help", "--help"]).stdout, /--guides\s+List guides only/);
+  const unknown = sfd(["help", "nope"]);
+  assert.equal(unknown.status, 2);
+  assert.match(unknown.stderr, /Unknown help topic: nope/);
+  assert.match(unknown.stderr, /sfd help -a/);
+  assert.equal(unknown.stdout, "");
+  assert.equal(existsSync(join(runtime, "sfd.sock")), false);
+  assert.equal(existsSync(join(runtime, "sfd.pid")), false);
+});
+
+test("command help is specific for every registered command", () => {
+  for (const entry of COMMANDS) {
+    const args = [...entry.name.split(" "), "--help"];
+    const result = sfd(args);
+    assert.equal(result.status, 0, `${entry.name}: ${result.stderr}`);
+    assert.equal(result.stderr, "", entry.name);
+    if (entry.name === "hook") {
+      assert.match(result.stdout, /Usage: sfd hook/);
+    } else if (entry.name === "discover") {
+      assert.match(result.stdout, /sfd discover/);
+    } else {
+      assert.ok(result.stdout.startsWith(`Usage: sfd ${entry.name}`), `${entry.name}: ${result.stdout}`);
+      assert.ok(result.stdout.includes(entry.summary.split("\n")[0]), entry.name);
+    }
+  }
+  for (const name of ["org list", "agents-snippet", "start", "stop", "status", "reload"]) {
+    const result = sfd([...name.split(" "), "--help"]);
+    assert.doesNotMatch(result.stdout, /-o, --target-org/, name);
+  }
+  for (const name of ["agents-snippet", "start", "stop", "reload"]) {
+    const result = sfd([name, "--help"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /--json/, name);
+    assert.match(result.stdout, /-h, --help/, name);
+  }
+  for (const name of ["query", "org list", "status"]) {
+    const result = sfd([...name.split(" "), "--help"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /--json/, name);
+  }
+  assert.match(sfd(["query", "--help"]).stdout, /-o, --target-org/);
+  const all = sfd(["--help"]);
+  assert.equal(all.status, 0);
+  assert.match(all.stdout, /--version\s+Print the sfd version/);
+  for (const { name } of COMMANDS) assert.ok(all.stdout.includes(name), name);
+  const unknown = sfd(["bogus", "--help"]);
+  assert.equal(unknown.status, 2);
+  assert.match(unknown.stderr, /Unknown command: bogus/);
+  assert.match(unknown.stderr, /Run sfd --help/);
+  assert.equal(unknown.stdout, "");
+});
 
 test("auto-starts the daemon and runs a query against the resolved org", () => {
   const r = sfd(["query", "SELECT Id FROM Account"]);

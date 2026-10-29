@@ -208,9 +208,35 @@ test("Gemini JSONL sessions use the last copy of each message and keep rewound c
   const records = await collect(gemini({ home, since, stats }));
   assert.deepEqual(records.map(record => record.command), ["sf org display", "sfd org", "sf data query -q 'SELECT Id FROM Account'"]);
   assert.equal(records[0].outputChars, 6);
+  assert.ok(records.every(record => record.durationMs === undefined), "no call timestamps");
   assert.ok(records.every(record => record.cwd === "/work/app" && record.session === file));
   assert.equal(stats.malformedEntries, 1);
   assert.ok(stats.ignoredEntries >= 2, "unknown record and user message");
+});
+
+test("Gemini durations come from lone calls stamped after their message", async t => {
+  const { home, paths } = await fixture(t);
+  const file = join(home, ".gemini/tmp/project/chats/session-2026-10-21T12-00-abcd.jsonl");
+  await mkdir(resolve(file, ".."), { recursive: true });
+  const shell = (command, timestamp) => ({ name: "run_shell_command", args: { command }, timestamp });
+  const message = (id, timestamp, toolCalls) => ({ id, timestamp, type: "gemini", content: "", toolCalls });
+  await writeFile(file, [
+    { sessionId: "s", cwd: "/work/app" },
+    message("a", "2026-10-21T12:00:00Z", [shell("sf org display", "2026-10-21T12:00:05Z")]),
+    message("b", "2026-10-21T12:01:00Z", [shell("sf org display", "2026-10-21T12:01:09Z"), shell("sf org list", "2026-10-21T12:01:09Z")]),
+    message("c", "2026-10-21T12:02:00Z", [shell("sf org display", "2026-10-21T12:01:59Z")]),
+    message("d", undefined, [shell("sf org display", "2026-10-21T12:03:00Z")]),
+    message("e", "2026-10-21T12:04:00Z", [shell("sf org display", "2026-10-21T12:04:00Z")]),
+    message("f", "2026-10-21T12:05:00Z", [shell("sf org display", "2026-10-21T12:05:03Z"), { name: "read_file", args: { path: "x" }, timestamp: "2026-10-21T12:05:03Z" }]),
+    message("g", 0, [shell("sf org display", "2026-10-21T12:06:00Z")])
+  ].map(entry => JSON.stringify(entry)).join("\n"));
+  await utimes(file, new Date("2026-10-22"), new Date("2026-10-22"));
+  await rm(paths.gemini);
+  const records = await collect(gemini({ home, since }));
+  assert.deepEqual(records.map(record => record.durationMs), [5000, ...Array(7).fill(undefined)]);
+  const report = await discover({ home, since, agents: ["gemini"] });
+  assert.equal(report.estimates.durationSamples, 1);
+  assert.equal(report.estimates.timeSavedMs, 4700);
 });
 
 test("Codex cmd arguments, argv, missing results and malformed arguments", async t => {

@@ -6,7 +6,8 @@ import { call, isRunning, startDaemon, DaemonError, VERSION } from "../src/clien
 import { findProjectDir, resolveTargetOrg } from "../src/project.mjs";
 import { formatMetadataTypes, formatMetadataList, formatOrgList, formatApex, formatLog, formatLogList, formatDeploy, formatTests, formatRetrieve, formatTracking, toCsv } from "../src/format.mjs";
 import { paths } from "../src/paths.mjs";
-import { commandHelp } from "../src/commands.mjs";
+import { commandHelp, commandUsage } from "../src/commands.mjs";
+import { helpUsageError, renderCommandManual, renderGuide, renderHelpIndex } from "../src/help-topics.mjs";
 import { snippet, upsertSnippet } from "../src/snippet.mjs";
 import { UsageError } from "../src/usage-error.mjs";
 
@@ -22,7 +23,10 @@ ${commandHelp()}
 Common options:
   -o, --target-org <alias>  Org alias or username (default: sf target-org config)
   --json                    Print the raw JSON response
+  --version                 Print the sfd version
   -h, --help                Show this help
+
+Run 'sfd help <command|guide>' for full documentation.
 
 Exit codes: 0 success, 1 operation failed, 2 usage error, 3 daemon error.`;
 
@@ -31,6 +35,7 @@ const options = {
   write: { type: "boolean" },
   json: { type: "boolean" },
   "sf-json": { type: "boolean" },
+  version: { type: "boolean" },
   help: { type: "boolean", short: "h" },
   folder: { type: "string" },
   details: { type: "boolean" },
@@ -104,6 +109,24 @@ function print(value) {
 }
 
 async function run(argv) {
+  // Version is a side-effect-free global flag. It takes precedence over commands and --sf-json.
+  if (argv.includes("--version")) { print(`sfd ${VERSION}`); return 0; }
+  if (argv[0] === "help") {
+    const { values, positionals } = parseArgs({ args: argv.slice(1), options: {
+      all: { type: "boolean", short: "a" }, guides: { type: "boolean", short: "g" },
+      help: { type: "boolean", short: "h" }
+    }, allowPositionals: true });
+    if (values.help) { print(commandUsage("help")); return 0; }
+    if (values.all && values.guides) throw new UsageError("sfd help accepts only one of --all or --guides.");
+    if ((values.all || values.guides) && positionals.length) throw new UsageError("sfd help --all and --guides do not accept a topic.");
+    if (!positionals.length) { print(renderHelpIndex({ guidesOnly: values.guides })); return 0; }
+    const topic = positionals.join(" ");
+    const manual = renderCommandManual(topic);
+    if (manual !== undefined) { print(manual); return 0; }
+    const guide = renderGuide(topic);
+    if (guide !== undefined) { print(guide); return 0; }
+    throw new UsageError(helpUsageError(topic));
+  }
   if (argv.includes("--sf-json") && ["hook", "discover"].includes(argv[0])) throw new UsageError("--sf-json is unsupported for this command.");
   if (argv[0] === "hook") {
     const { runHook } = await import("../src/hooks.mjs");
@@ -124,6 +147,12 @@ async function run(argv) {
   }
   const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
   let [command, ...rest] = positionals;
+  if (values.help && command) {
+    const key = ["logs get", "org list"].find(name => name === `${command} ${rest[0]}`) ?? command;
+    const usage = commandUsage(key);
+    if (usage) { print(usage); return 0; }
+    throw new UsageError(`Unknown command: ${command}. Run sfd --help.`);
+  }
   if (values.help || !command) { print(USAGE); return 0; }
 
   if (values["sf-json"]) {

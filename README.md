@@ -22,6 +22,12 @@ sfd query "SELECT Id, Name FROM Account LIMIT 5" -o my-org
 
 ## Commands
 
+Run `sfd --help` for the full command list, `sfd <command> --help` for short
+command usage, and `sfd help <command>` for the full manual. `sfd help -g`
+lists concept guides built from the installed documentation. These help commands
+work without starting the daemon. Run `sfd --version` to print the installed
+version.
+
 | Command | Does | `sf` equivalent |
 | --- | --- | --- |
 | `sfd query "<soql>"` | SOQL, all pages by default, `attributes` stripped. `--limit <n>` caps rows; `--csv` prints CSV. `--tooling`, `--all`, `--raw` for the unstripped result | `sf data query` |

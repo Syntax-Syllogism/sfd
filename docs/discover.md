@@ -45,7 +45,7 @@ the transcript file path. Missing stores are treated as empty.
 | --- | --- | --- | --- | --- |
 | Claude Code | `~/.claude/projects/**/*.jsonl` | `tool_use` with `name: "Bash"` and a string `input.command` | Result line timestamp minus call line timestamp, paired by `id` and `tool_use_id` | `tool_result.content` length; a non-string value is measured as its JSON text |
 | Codex CLI | `~/.codex/sessions/**/*.jsonl` | `response_item` `function_call` named `shell`, `shell_command` or `exec_command`, with JSON `arguments` | Output line timestamp minus call line timestamp, paired by `call_id` | `function_call_output.output` length |
-| Gemini CLI | `~/.gemini/tmp/**/chats/*.jsonl`, `~/.gemini/tmp/**/chats/*.json` and `~/.gemini/tmp/**/logs.json` | `messages[].toolCalls[]` named `run_shell_command` with `args.command` | None today. The reader sets no duration | `toolCalls[].result` length |
+| Gemini CLI | `~/.gemini/tmp/**/chats/*.jsonl`, `~/.gemini/tmp/**/chats/*.json` and `~/.gemini/tmp/**/logs.json` | `messages[].toolCalls[]` named `run_shell_command` with `args.command` | `toolCalls[].timestamp` (stamped when the call's batch completes) minus the message timestamp (recorded when the model's response ends), only when the message has a single tool call and the difference is positive. Includes approval wait | `toolCalls[].result` length |
 
 - **Claude:** A call with no matching result is still yielded, without a
   duration or output size. Only calls that mention `sf`, `sfd` or `sfdx` are
@@ -188,8 +188,9 @@ A missing store is not a diagnostic.
 ## Known limits
 
 - Codex custom tools, including JavaScript `exec` tools, are ignored.
-- Gemini records never have a duration, so its time estimate never contributes.
-  Its output sizes do contribute when present.
+- Gemini stamps every call in a batch with the batch's completion time, so calls
+  from a message with several tool calls have no duration. Their output sizes
+  still contribute when present.
 - Gemini's transcript format is only partly verified. The fixtures cover the
   documented shapes, and a user-only `logs.json` has no shell calls.
 - Claude calls that never receive a result are counted without a duration or

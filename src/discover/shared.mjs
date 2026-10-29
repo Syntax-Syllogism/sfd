@@ -58,8 +58,14 @@ export function outputChars(output) {
   return (typeof output === "string" ? output : JSON.stringify(output)).length;
 }
 
+// Milliseconds between two ISO strings or Dates; NaN when either is missing.
+export function elapsed(start, end) {
+  const time = value => typeof value === "string" || value instanceof Date ? +new Date(value) : NaN;
+  return time(end) - time(start);
+}
+
 export function complete(record, timestamp, output) {
-  const duration = +new Date(timestamp) - +record.ts;
+  const duration = elapsed(record.ts, timestamp);
   return {
     ...record,
     ...(Number.isFinite(duration) && duration >= 0 ? { durationMs: duration } : {}),

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join, basename, dirname } from "node:path";
-import { files, lines, matches, candidate, count, outputChars } from "./shared.mjs";
+import { files, lines, matches, candidate, count, outputChars, elapsed } from "./shared.mjs";
 
 export async function* read(options) {
   const { home, since = new Date(0), stats } = options;
@@ -23,6 +23,10 @@ export async function* read(options) {
         };
         const chars = outputChars(tool.result);
         if (chars !== undefined) record.outputChars = chars;
+        // A call is stamped when its whole batch completes, so only a lone
+        // call's duration can be measured from the message that requested it.
+        const duration = elapsed(message.timestamp, tool.timestamp);
+        if (message.toolCalls.length === 1 && Number.isFinite(duration) && duration > 0) record.durationMs = duration;
         if (matches(record, options)) yield record;
       }
     }
