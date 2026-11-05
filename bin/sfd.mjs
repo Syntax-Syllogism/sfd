@@ -10,6 +10,7 @@ import { commandHelp, commandUsage } from "../src/commands.mjs";
 import { helpUsageError, renderCommandManual, renderGuide, renderHelpIndex } from "../src/help-topics.mjs";
 import { snippet, upsertSnippet } from "../src/snippet.mjs";
 import { UsageError } from "../src/usage-error.mjs";
+import { synchronousTestError } from "../src/test-options.mjs";
 
 import { SF_JSON_COMMANDS, sfEnvelope, sfError } from "../src/sf-json.mjs";
 
@@ -68,6 +69,7 @@ const options = {
   "class-names": { type: "string", short: "n", multiple: true },
   "suite-names": { type: "string", short: "s", multiple: true },
   "code-coverage": { type: "boolean", short: "c" },
+  synchronous: { type: "boolean", short: "y" },
   wait: { type: "string", short: "w" }
 };
 
@@ -314,13 +316,22 @@ async function run(argv) {
       }
       break;
     }
-    case "test":
+    case "test": {
+      const selectors = {
+        classNames: split(values["class-names"]), tests: split(values.tests),
+        suiteNames: split(values["suite-names"]), testLevel: values["test-level"]
+      };
+      if (values.synchronous) {
+        const error = synchronousTestError(selectors);
+        if (error) throw new UsageError(error);
+      }
       req = {
-        org: org(), classNames: split(values["class-names"]), tests: split(values.tests), suiteNames: split(values["suite-names"]),
-        logs: values.logs, noTrace: values["no-trace"], testLevel: values["test-level"], codeCoverage: values["code-coverage"], waitMinutes: wait(values)
+        org: org(), ...selectors, synchronous: values.synchronous,
+        logs: values.logs, noTrace: values["no-trace"], codeCoverage: values["code-coverage"], waitMinutes: wait(values)
       };
       render = result => formatTests(result, req.org);
       break;
+    }
     case "org":
       if (rest[0] === "list") {
         if (rest.length !== 1 || values["target-org"] !== undefined) throw new UsageError("org list accepts no target org or additional arguments.");

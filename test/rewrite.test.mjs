@@ -58,7 +58,10 @@ const rewrites = [
   ["sf project deploy start -d src -d other -m ApexClass:X --dry-run -l RunSpecifiedTests -t A B -w 10 -o dev --json", "sfd deploy -d 'src' -d 'other' -m 'ApexClass:X' --check-only -l 'RunSpecifiedTests' -t 'A' -t 'B' -w '10' -o 'dev'"],
   ["sf project deploy start --source-dir=src --metadata ApexClass:X ApexClass:Y", "sfd deploy -d 'src' -m 'ApexClass:X' -m 'ApexClass:Y'"],
   ["sf apex run test -n A B -t A.method -s S -l RunSpecifiedTests -c -w 5 -r human --json -o dev", "sfd test -n 'A' -n 'B' -t 'A.method' -s 'S' -l 'RunSpecifiedTests' -c -w '5' -o 'dev'"],
-  ["sf apex run test --synchronous --class-names=A --result-format=json", "sfd test -n 'A'"],
+  ["sf apex run test --synchronous --class-names=A --result-format=json", "sfd test --synchronous -n 'A'"],
+  ["sf apex run test -n A --synchronous", "sfd test -n 'A' --synchronous"],
+  ["sf apex run test -t ns.A.one -t ns.A.two -y -w 2", "sfd test -t 'ns.A.one' -t 'ns.A.two' --synchronous -w '2'"],
+  ["sf apex run test -n A -n A -y", "sfd test -n 'A' -n 'A' --synchronous"],
   ["sf sobject describe -s Account -t --target-org=dev --json", "sfd describe 'Account' --tooling -o 'dev'"],
   ["sf api request rest /services/data/v67.0/limits -X GET -o dev", "sfd rest '/services/data/v67.0/limits' -X 'GET' -o 'dev'"],
   ['sf api request rest /path --method=POST --body \'{"x":1}\'', 'sfd rest \'/path\' -X \'POST\' --body \'{"x":1}\''],
@@ -206,3 +209,12 @@ test('heredoc bytes stay opaque when another pipeline or list element owns the b
     ["sf apex run <<EOF\n'\nEOF\nsf org display", "sfd apex <<EOF\n'\nEOF\nsfd org"],
   ]) assert.equal(rewrite(input).command, output);
 });
+
+for (const shell of ["posix", "powershell"]) {
+  test(`synchronous test rewrites preserve the runner and reject invalid selectors in ${shell}`, () => {
+    assert.equal(rewrite("sf apex run test -n A -y", { shell }).command, "sfd test -n 'A' --synchronous");
+    for (const selectors of ["-n A B", "-n A -n B", "-n 'A,B'", "-t A.x -t B.y", "-t ns.A.x -t ns.B.y", "-n A -t B.x", "-s S -n A", "-n A -l RunLocalTests", ""]) {
+      assert.match(rewrite(`sf apex run test -y ${selectors}`, { shell }).skip, /synchronous runs need one class/);
+    }
+  });
+}

@@ -104,6 +104,21 @@ test("command help is specific for every registered command", () => {
   assert.equal(unknown.stdout, "");
 });
 
+
+test("invalid synchronous selectors fail before org resolution or daemon startup", () => {
+  for (const selectors of [["-s", "S", "-n", "A"], ["-n", "A", "-n", "B"], ["-n", "A,B"], ["-t", "A.x", "-t", "B.y"],
+    ["-t", "ns.A.x", "-t", "ns.B.y"], ["-n", "A", "-t", "B.x"], ["-l", "RunLocalTests", "-n", "A"], ["-l", "RunAllTestsInOrg"],
+    ["-n", "A", "-s", ","], ["-n", "A", "--test-level="], []]) {
+    const result = spawnSync(process.execPath, [bin, "test", "-y", ...selectors], {
+      env: { ...env, SF_TARGET_ORG: "" }, encoding: "utf8"
+    });
+    assert.equal(result.status, 2, JSON.stringify(result));
+    assert.match(result.stderr, /Synchronous/);
+    assert.equal(result.stdout, "");
+    assert.equal(existsSync(join(runtime, "sfd.pid")), false);
+  }
+});
+
 test("auto-starts the daemon and runs a query against the resolved org", () => {
   const r = sfd(["query", "SELECT Id FROM Account"]);
   assert.equal(r.status, 0, r.stderr);
@@ -351,4 +366,24 @@ test('--sf-json daemon failure remains JSON with exit 3', async () => {
     assert.equal(JSON.parse(stdout).exitCode, 3);
     assert.equal(stderr, '');
   } finally { await new Promise(resolve => server.close(resolve)); }
+});
+
+
+test("synchronous flags and selectors reach the daemon and preserve test exit codes", () => {
+  assert.match(sfd(["test", "--help"]).stdout, /-y\/--synchronous/);
+  for (const selectors of [["-n", "A"], ["-n", "A", "-n", "A"], ["-n", "A", "-t", "A.one"], ["-t", "ns.A.one,ns.A.two"]]) {
+    const result = sfd(["test", "--synchronous", ...selectors, "-l", "RunSpecifiedTests", "-w", "2", "--json"]);
+    assert.equal(result.status, 0, result.stderr);
+    const { result: payload } = JSON.parse(result.stdout);
+    assert.equal(payload.synchronous, true);
+    assert.equal(payload.waitMinutes, 2);
+    assert.equal(payload.testLevel, "RunSpecifiedTests");
+  }
+  const passed = sfd(["test", "-y", "-n", "A"]);
+  assert.equal(passed.status, 0, passed.stderr);
+  assert.equal(passed.stdout, "Tests Passed on stub-org: 1 ran, 1 passed, 0 failed in 12 ms\n");
+  for (const json of [[], ["--json"]]) {
+    const failed = sfd(["test", "-y", "-t", "A.one", "--logs", ...json]);
+    assert.equal(failed.status, 1, failed.stderr);
+  }
 });

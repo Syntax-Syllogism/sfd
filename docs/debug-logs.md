@@ -117,8 +117,10 @@ With `--logs`, the test handler:
    five minutes from the start and adding five minutes to the finish to allow
    for clock skew with Salesforce. Rounds the start down and the finish up to
    whole seconds for SOQL UTC datetime literals.
-3. Queries up to ten `ApexLog` rows for the current user whose `StartTime` falls
-   in that window, newest first.
+3. Before running tests, snapshots up to 200 existing log IDs for the current
+   user at or after the padded start, newest first.
+4. After the run, queries up to ten `ApexLog` rows for the current user whose
+   `StartTime` falls in that window, excluding the snapshot IDs, newest first.
 
 Output depends on the result:
 
@@ -126,9 +128,10 @@ Output depends on the result:
 - If any test fails or any setup failure occurs, every listed log includes its
   filtered body.
 
-Other operations by the same user during the padded window can also appear in
-the list. The allowance covers clock differences of up to five minutes in
-either direction; larger differences can still omit logs.
+Logs from other activity by the same user during the run may still appear in
+the list. If more than 200 logs already exist in the snapshot window, older
+logs beyond that cap may also appear. The allowance covers clock differences
+of up to five minutes in either direction; larger differences can still omit logs.
 
 ## Changing this area
 

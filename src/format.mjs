@@ -191,7 +191,8 @@ export function summarizeTests(result) {
 export function formatTests(summary, org) {
   const parts = [`${summary.testsRan} ran`, `${summary.passing} passed`, `${summary.failing} failed`];
   if (summary.skipped) parts.push(`${summary.skipped} skipped`);
-  const lines = [`Tests ${summary.outcome} on ${org}: ${parts.join(", ")} in ${summary.testExecutionTimeInMs} ms (${summary.testRunId})`];
+  const runId = summary.testRunId ? ` (${summary.testRunId})` : "";
+  const lines = [`Tests ${summary.outcome} on ${org}: ${parts.join(", ")} in ${summary.testExecutionTimeInMs} ms${runId}`];
   if (summary.testRunCoverage) lines.push(`Coverage: run ${summary.testRunCoverage}, org-wide ${summary.orgWideCoverage}`);
   for (const s of summary.setupFailures) lines.push(`  ✖ setup ${s.name}: ${s.message}`);
   for (const f of summary.failures) {

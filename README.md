@@ -39,7 +39,7 @@ version.
 | `sfd deploy -d <path> \| -m <Type[:Name]>` | Deploy source. `--check-only`, `-l <level>`, `-t <test>`, `-w <minutes>` | `sf project deploy start` |
 | `sfd retrieve [-d <path> \| -m <Type[:Name]> \| -x <package.xml>]` | Retrieve source; no selector pulls tracked remote changes. `--ignore-conflicts`, `-w <minutes>` | `sf project retrieve start` |
 | `sfd tracking [--local \| --remote] [--conflicts]` | List local, remote and conflicting source-tracked changes; `--conflicts` shows only conflicts | |
-| `sfd test` | Run Apex tests. `-n <class>`, `-t <Class.method>`, `-s <suite>`, `-l <level>`, `-c` (coverage), `-w <minutes>`, `--logs` | `sf apex run test --wait` |
+| `sfd test` | Run Apex tests. `-n <class>`, `-t <Class.method>`, `-s <suite>`, `-l <level>`, `-c` (coverage), `-w <minutes>`, `--logs`, `-y/--synchronous` (one class) | `sf apex run test --wait` |
 | `sfd logs [--count 10] [--user <username>]` | Recent debug logs, one line each; `--limit` aliases `--count` | `sf apex list log` |
 | `sfd logs get <id\|latest>` | Debug, exception, validation, Flow error and high limit usage lines. `--full` prints raw text | `sf apex get log` |
 | `sfd org list [--all] [--status]` | Local authenticated orgs; `--all` includes expired scratch orgs, `--status` adds live checks | `sf org list --skip-connection-status` |
@@ -155,6 +155,11 @@ it down even if its protocol differs.
   `RunSpecifiedTests`.
 - `test` without selectors runs `RunLocalTests`. A non-matching method is
   reported as skipped, as with `sf`.
+- `test -y/--synchronous` uses the Tooling API synchronous runner for one
+  class: `sfd test -y -n MyTest` or `sfd test -y -t MyTest.one -t MyTest.two`.
+  Suites and test levels other than `RunSpecifiedTests` are usage errors.
+  `-w` still controls the client socket timeout, but does not limit the sync run.
+  Sync results omit the run ID suffix; JSON may have an empty or absent `testRunId`.
 - Paths in `-d` and the project directory resolve from the client's working
   directory, not the daemon's.
 

@@ -217,3 +217,14 @@ test("metadata member formatter renders names, groups, folders, empty lists and 
   assert.equal(formatMetadataList({ groups: [{ ...group, folders: true, folderType: "ReportFolder" }] }), "ReportFolder (2): use --folder <name> to list members\n  A\n  B");
   assert.equal(formatMetadataList({ groups: [{ ...group, members: [{ fullName: "A", lastModifiedDate: "2026-10-01T12:00:00Z", lastModifiedByName: "J. Smith", namespacePrefix: "abc", manageableState: "unmanaged" }, { fullName: "B" }] }] }, { details: true }), "A  2026-10-01  J. Smith  ns:abc  unmanaged\nB");
 });
+
+
+test("sync summaries omit empty or absent run IDs", () => {
+  for (const testRunId of [undefined, ""]) {
+    const summary = summarizeTests({
+      summary: { outcome: "Passed", testsRan: 1, passing: 1, failing: 0, testExecutionTimeInMs: 12, testRunId },
+      tests: []
+    });
+    assert.equal(formatTests(summary, "dev"), "Tests Passed on dev: 1 ran, 1 passed, 0 failed in 12 ms");
+  }
+});

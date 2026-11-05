@@ -75,8 +75,8 @@ export const COMMANDS = [
   {
     "name": "test",
     "args": "",
-    "summary": "Run Apex tests. -n <class> (repeatable), -t <Class.method> (repeatable),\n-s <suite> (repeatable), -l <test level>, -c (coverage), -w <minutes>, --logs, --no-trace",
-    "agentTip": "-n <class> | -t <Class.method>: Apex tests; --logs, -c"
+    "summary": "Run Apex tests. -n <class> (repeatable), -t <Class.method> (repeatable),\n-s <suite> (repeatable), -l <test level>, -c (coverage), -w <minutes>, --logs, --no-trace,\n-y/--synchronous (one class; no suites; RunSpecifiedTests only; -w affects socket timeout only)",
+    "agentTip": "-n <class> [-y] | -t <Class.method>: Apex tests; --logs, -c"
   },
   {
     "name": "logs",

@@ -1,5 +1,6 @@
 import { split } from "./shell.mjs";
 import { SF_JSON_COMMANDS } from "./sf-json.mjs";
+import { synchronousTestError } from "./test-options.mjs";
 
 // This is deliberately a literal-shell subset. Unknown shell syntax stays with sf.
 const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
@@ -52,7 +53,7 @@ const mappings = [
   { sf: "apex list log", sfd: "logs", flags: [org, json] },
   { sf: "apex get log", sfd: "logs get", flags: [org, json, ["i log-id", "", true], ["n number", "", true]] },
   { sf: "data query", sfd: "query", flags: [org, json, tooling, ["q query", "", true], ["all-rows", "--all", false], format], required: "q" },
-  { sf: "apex run test", sfd: "test", flags: [org, json, wait, level, tests, format, ["n class-names", "-n", true, true], ["s suite-names", "-s", true, true], ["c code-coverage", "-c", false], ["y synchronous", "", false]] },
+  { sf: "apex run test", sfd: "test", flags: [org, json, wait, level, tests, format, ["n class-names", "-n", true, true], ["s suite-names", "-s", true, true], ["c code-coverage", "-c", false], ["y synchronous", "--synchronous", false]] },
   { sf: "apex run", sfd: "apex", flags: [org, json, ["f file", "-f", true]] },
   { sf: "project retrieve start", sfd: "retrieve", flags: [org, json, wait, ["d source-dir", "-d", true, true], ["m metadata", "-m", true, true], ["x manifest", "-x", true], ["c ignore-conflicts", "--ignore-conflicts", false]] },
   { sf: "project deploy start", sfd: "deploy", flags: [org, json, wait, level, tests, ["d source-dir", "-d", true, true], ["m metadata", "-m", true, true], ["dry-run", "--check-only", false]] },
@@ -87,7 +88,7 @@ function mapArgs(argv, quoteValue) {
         while (args[i + 1] !== undefined && !args[i + 1].startsWith("-")) values.push(args[++i]);
       }
     } else if (match[3] !== undefined) return skip(`unsupported boolean value ${arg}`);
-    seen.set(key, values);
+    seen.set(key, multiple ? [...(seen.get(key) ?? []), ...values] : values);
     if (key === "r") {
       if (mapping.sfd === "query" && values[0] === "csv") output.push("--csv");
       else if (!["human", "json"].includes(values[0])) return skip(`unsupported result format ${values[0]}`);
@@ -104,6 +105,13 @@ function mapArgs(argv, quoteValue) {
   if (mapping.sfd === "deploy" && !seen.has("d") && !seen.has("m")) return skip("deploy needs source-dir or metadata");
   if (mapping.sfd === "retrieve" && ["d", "m", "x"].filter(key => seen.has(key)).length > 1) return skip("retrieve selectors are mutually exclusive");
   if (mapping.sfd === "test" && !seen.has("w") && !seen.has("y")) return skip("asynchronous tests need --wait or --synchronous");
+  if (mapping.sfd === "test" && seen.has("y")) {
+    const selectors = key => seen.get(key)?.flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean);
+    const error = synchronousTestError({
+      classNames: selectors("n"), tests: selectors("t"), suiteNames: selectors("s"), testLevel: seen.get("l")?.[0]
+    });
+    if (error) return skip(`synchronous runs need one class: ${error}`);
+  }
   if (mapping.sfd === "rest") {
     const method = seen.get("X")?.[0] ?? "GET";
     if (!["GET", "POST", "PUT", "PATCH", "HEAD", "DELETE", "OPTIONS", "TRACE"].includes(method)) return skip("unsupported REST method");

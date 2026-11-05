@@ -48,6 +48,7 @@ export function createHandlers() {
       body: "x|EXECUTION_STARTED\n" + "x|USER_DEBUG|[1]|DEBUG|hello" });
     },
     test: async args => {
+      if (args.synchronous && !args.logs) return { ...args, testsRan: 1, passing: 1, failing: 0, outcome: "Passed", testExecutionTimeInMs: 12, setupFailures: [], failures: [] };
       if (args.logs) return { ...args, testsRan: 1, passing: 0, failing: 1, outcome: "Failed", setupFailures: [], failures: [],
         logs: [{ id: "07L000000000001", operation: "test", status: "Failed", body: "x|USER_DEBUG|[1]|DEBUG|hello" }] };
       throw Object.assign(new Error("org unreachable"), { name: "ConnectionError" }); }

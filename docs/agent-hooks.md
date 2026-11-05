@@ -116,7 +116,7 @@ below apply to POSIX mode. PowerShell uses the subset above.
 | `sf` command | `sfd` command | Notes |
 | --- | --- | --- |
 | `data query` | `query` | `-q` / `--query` is required. `-t` / `--use-tooling-api` becomes `--tooling`; `--all-rows` becomes `--all`. `-r csv` / `--result-format csv` becomes `--csv`; `-r human` and `-r json` are accepted and dropped. |
-| `apex run test` | `test` | Needs a positive `-w` / `--wait`, or `--synchronous`. `-n`, `-t`, `-s`, `-l`, `-c` and `-w` map directly. `--synchronous` is dropped, because `sfd test` always waits for the run. |
+| `apex run test` | `test` | Needs a positive `-w` / `--wait`, or `--synchronous`. `-n`, `-t`, `-s`, `-l`, `-c` and `-w` map directly. `-y` / `--synchronous` forwards as `--synchronous` for one class. Sync runs with suites, multiple classes, no class, or a level other than `RunSpecifiedTests` stay with `sf`. |
 | `apex list log` | `logs` | Lists recent logs; automatic TraceFlag setup applies. |
 | `apex get log` | `logs get` | `-i` / `--log-id` or `-n` / `--number 1` required. Output directory options stay with `sf`. Filtered output. |
 | `apex run` | `apex` | `-f <file>` maps directly. Code can also come from a pipeline into the command (`cat x.apex \| sf apex run`) or a heredoc. |
@@ -179,7 +179,7 @@ The rewriter skips these, and the agent runs the original command:
 - Expansions (`$`, backticks), unquoted tilde/glob syntax, and unsupported
   operators inside the sf call. They do not block other eligible calls.
 - Unclosed quoting/substitution, missing heredoc terminators, and `<<-`.
-- Duplicate flags, missing values, values beginning with `-`, unsupported
+- Duplicate non-repeatable flags, missing values, values beginning with `-`, unsupported
   result formats, and the retrieve/deploy output and preview options absent
   from the table.
 

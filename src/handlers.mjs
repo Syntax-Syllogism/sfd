@@ -519,7 +519,7 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       });
     }),
 
-    test: ({ org, classNames, tests, suiteNames, testLevel, codeCoverage, logs, noTrace, waitMinutes = 60 }) => withConn(org, async conn => {
+    test: ({ org, classNames, tests, suiteNames, testLevel, synchronous, codeCoverage, logs, noTrace, waitMinutes = 60 }) => withConn(org, async conn => {
       const user = logs ? await currentUser(conn) : undefined;
       const trace = logs ? await traceFor(conn, org, user, noTrace) : undefined;
       return afterTrace(trace, async () => {
@@ -528,14 +528,23 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
         const level = testLevel ?? (classNames?.length || tests?.length || suiteNames?.length ? "RunSpecifiedTests" : "RunLocalTests");
         // apex-node takes comma-separated strings, as the sf flags do.
         const csv = list => (list?.length ? list.join(",") : undefined);
-        const payload = await service.buildAsyncPayload(level, csv(tests), csv(classNames), csv(suiteNames));
+        const payload = synchronous
+          ? await service.buildSyncPayload("RunSpecifiedTests", csv(tests), csv([...new Set(classNames)]))
+          : await service.buildAsyncPayload(level, csv(tests), csv(classNames), csv(suiteNames));
         const startedAt = new Date(Math.floor((Date.now() - LOG_CLOCK_SKEW_MS) / 1000) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
-        const result = await service.runTestAsynchronous(payload, Boolean(codeCoverage), false, undefined, undefined, Duration.minutes(waitMinutes));
+        const logWindow = logs ? `LogUserId = ${soqlString(user.id)} AND StartTime >= ${startedAt}` : undefined;
+        const before = logs
+          ? (await conn.query(`SELECT Id FROM ApexLog WHERE ${logWindow} ORDER BY StartTime DESC LIMIT 200`)).records.map(row => row.Id)
+          : [];
+        const result = synchronous
+          ? await service.runTestSynchronous(payload, Boolean(codeCoverage))
+          : await service.runTestAsynchronous(payload, Boolean(codeCoverage), false, undefined, undefined, Duration.minutes(waitMinutes));
         const summary = summarizeTests(result);
         if (logs) {
           // Pad both bounds for clock skew, rounding outward to whole-second SOQL literals.
           const finishedAt = new Date(Math.ceil((Date.now() + LOG_CLOCK_SKEW_MS) / 1000) * 1000).toISOString().replace(/\.\d{3}Z$/, "Z");
-          const rows = await logRows(conn, `LogUserId = ${soqlString(user.id)} AND StartTime >= ${startedAt} AND StartTime <= ${finishedAt}`, 10);
+          const exclusion = before.length ? ` AND Id NOT IN (${before.map(soqlString).join(", ")})` : "";
+          const rows = await logRows(conn, `${logWindow} AND StartTime <= ${finishedAt}${exclusion}`, 10);
           summary.logs = summary.failing > 0 || summary.failures.length || summary.setupFailures.length
             ? await Promise.all(rows.map(row => logBody(conn, row))) : rows.map(row => ({ id: row.Id }));
         }

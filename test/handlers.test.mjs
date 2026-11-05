@@ -7,7 +7,7 @@ import { createHandlers, ensureTrace } from "../src/handlers.mjs";
 
 function fixture() {
   const home = mkdtempSync(join(tmpdir(), "sfd-handler-"));
-  const calls = { orgs: 0, clears: 0, builds: [], deploys: [], tracking: 0, payloads: [], runs: [], retrieves: [], polls: [], trackingOptions: [], changes: [], deletes: 0, retrieveTracking: 0 };
+  const calls = { orgs: 0, clears: 0, builds: [], deploys: [], tracking: 0, payloads: [], runs: [], syncPayloads: [], syncRuns: [], retrieves: [], polls: [], trackingOptions: [], changes: [], deletes: 0, retrieveTracking: 0 };
   const state = { success: true, tracks: true, active: 0, maxActive: 0, size: 1, conflicts: [], rows: [], deletedFiles: [] };
   const conn = { query: async () => ({ totalSize: 0, done: true, records: [] }) };
   const projectFile = join(home, "sfdx-project.json");
@@ -67,6 +67,8 @@ function fixture() {
       };
     } } },
     "@salesforce/apex-node": { TestService: class {
+      async buildSyncPayload(...args) { calls.syncPayloads.push(args); return { tests: args[1], classNames: args[2] }; }
+      async runTestSynchronous(...args) { state.beforeRun?.(); calls.syncRuns.push(args); return state.testResult ?? { summary: {} }; }
       async buildAsyncPayload(...args) { calls.payloads.push(args); return { level: args[0] }; }
       async runTestAsynchronous(...args) { state.beforeRun?.(); calls.runs.push(args); return state.testResult ?? { summary: {} }; }
     } }
@@ -183,6 +185,29 @@ test("test defaults and CSV selectors match apex-node payload arguments", async 
 });
 
 
+test("synchronous tests use only the sync payload and runner, preserving failures and coverage", async () => {
+  for (const codeCoverage of [false, true]) {
+    const { handlers, calls, state } = fixture();
+    state.testResult = {
+      summary: { outcome: "Failed", testRunId: "", testsRan: 1, passing: 0, failing: 1 },
+      tests: [{ fullName: "A.setup", outcome: "Fail", message: "setup failed", stackTrace: "Class.A.setup: line 2" }],
+      codecoverage: [{ name: "A", percentage: "80%", uncoveredLines: [2] }]
+    };
+    const result = await handlers.test({ synchronous: true, tests: ["A.one", "A.two"], classNames: ["A", "A"], codeCoverage, waitMinutes: 2 });
+    assert.deepEqual(calls.syncPayloads, [["RunSpecifiedTests", "A.one,A.two", "A"]]);
+    assert.deepEqual(calls.syncRuns, [[{ tests: "A.one,A.two", classNames: "A" }, codeCoverage]]);
+    assert.deepEqual(calls.payloads, []);
+    assert.deepEqual(calls.runs, []);
+    assert.equal(result.testRunId, "");
+    assert.equal(result.failing, 1);
+    assert.deepEqual(result.failures, [{ name: "A.setup", outcome: "Fail", message: "setup failed", stackTrace: "Class.A.setup: line 2" }]);
+    assert.deepEqual(result.coverage, state.testResult.codecoverage);
+    await handlers.test({ synchronous: true, classNames: ["A", "A"] });
+    assert.deepEqual(calls.syncPayloads[1], ["RunSpecifiedTests", undefined, "A"]);
+  }
+});
+
+
 test("retrieve builds selectors, merges source, polls and updates tracking only on success", async () => {
   for (const tracks of [false, true]) for (const success of [false, true]) {
     const { handlers, calls, state, home } = fixture();
@@ -275,11 +300,11 @@ test("retrieves, tracking and deploys share the project queue", async () => {
 function logFixture() {
   const f = fixture();
   const events = [];
-  const state = { flags: [], levels: [], rows: [], failWrite: false };
+  const state = { flags: [], levels: [], before: [], rows: [], failWrite: false };
   f.conn.getAuthInfoFields = () => ({ userId: "005000000000001", username: "agent@example.com" });
   f.conn.getApiVersion = () => "67.0";
   f.conn.request = async (url, options) => { events.push({ url, options }); return "x|USER_DEBUG|[1]|DEBUG|hello"; };
-  f.conn.query = async q => { events.push(q); return { records: state.rows }; };
+  f.conn.query = async q => { events.push(q); return { records: q.startsWith("SELECT Id FROM ApexLog") ? state.before : state.rows }; };
   f.conn.tooling = {
     query: async q => { events.push(q); return { records: q.includes("FROM TraceFlag") ? state.flags : state.levels }; },
     sobject: type => Object.fromEntries(["create", "update"].map(method => [method, async values => {
@@ -348,18 +373,20 @@ test("logs escape user filters; latest selects authenticated user and bodies req
 });
 
 test("test --logs enables tracing before the run; failures get bodies and passes get IDs", async () => {
-  for (const failing of [0, 1]) {
+  for (const synchronous of [false, true]) for (const failing of [0, 1]) {
     const { handlers, state, logState, events, calls } = logFixture();
     state.beforeRun = () => assert.ok(events.some(e => e.type === "TraceFlag" && e.method === "create"));
     state.testResult = { summary: { failing }, tests: [] };
     logState.rows = [{ Id: "07L000000000001", Operation: "test" }];
-    const summary = await handlers.test({ logs: true });
+    const summary = await handlers.test({ logs: true, synchronous, classNames: ["A"] });
     assert.equal(summary.logs[0].id, "07L000000000001");
     assert.equal(Boolean(summary.logs[0].body), Boolean(failing));
     assert.equal(summary.trace.action, "created");
-    assert.equal(calls.runs.length, 1);
-    const q = events.find(e => typeof e === "string" && e.includes("FROM ApexLog"));
+    assert.equal(calls.runs.length, Number(!synchronous));
+    assert.equal(calls.syncRuns.length, Number(synchronous));
+    const q = events.find(e => typeof e === "string" && e.includes("FROM ApexLog") && e.includes("LIMIT 10"));
     assert.match(q, /LogUserId = '005000000000001' AND StartTime >= .* AND StartTime <= .*LIMIT 10$/);
+    assert.doesNotMatch(q, /NOT IN/);
     assert.equal(events.filter(e => e.url).length, failing);
   }
   const { handlers, events } = logFixture();
@@ -368,12 +395,51 @@ test("test --logs enables tracing before the run; failures get bodies and passes
 });
 
 
+test("test --logs snapshots existing IDs before either run path and excludes them before the result cap", async () => {
+  for (const synchronous of [false, true]) {
+    const { handlers, state, logState, events } = logFixture();
+    logState.before = [{ Id: "07L000000000001" }, { Id: "07L000000000002" }];
+    logState.rows = [{ Id: "07L000000000003" }];
+    state.beforeRun = () => {
+      const queries = events.filter(e => typeof e === "string" && e.includes("FROM ApexLog"));
+      assert.equal(queries.length, 1);
+      assert.match(queries[0], /^SELECT Id FROM ApexLog WHERE LogUserId = '005000000000001' AND StartTime >= \S+ ORDER BY StartTime DESC LIMIT 200$/);
+      assert.ok(events.findIndex(e => e.type === "TraceFlag" && e.method === "create") < events.indexOf(queries[0]));
+    };
+    const summary = await handlers.test({ logs: true, synchronous, classNames: ["A"] });
+    const queries = events.filter(e => typeof e === "string" && e.includes("FROM ApexLog"));
+    assert.equal(queries.length, 2);
+    assert.match(queries[1], / AND Id NOT IN \('07L000000000001', '07L000000000002'\) ORDER BY StartTime DESC LIMIT 10$/);
+    assert.equal(queries[0].match(/StartTime >= (\S+)/)[1], queries[1].match(/StartTime >= (\S+)/)[1]);
+    assert.deepEqual(summary.logs, [{ id: "07L000000000003" }]);
+  }
+});
+
+test("test without --logs makes no ApexLog queries on either run path", async () => {
+  for (const synchronous of [false, true]) {
+    const { handlers, events } = logFixture();
+    const summary = await handlers.test({ synchronous, classNames: ["A"] });
+    assert.equal(events.length, 0);
+    assert.equal(summary.logs, undefined);
+  }
+});
+
+test("test --logs snapshot failures stop the run and preserve the trace notice", async () => {
+  for (const synchronous of [false, true]) {
+    const { handlers, conn, calls } = logFixture();
+    conn.query = async () => { throw new Error("cannot snapshot logs"); };
+    await assert.rejects(handlers.test({ logs: true, synchronous, classNames: ["A"] }),
+      e => e.message === "cannot snapshot logs" && e.trace?.action === "created");
+    assert.equal(calls.runs.length + calls.syncRuns.length, 0);
+  }
+});
+
 test("test --logs uses whole-second UTC bounds enclosing the run across midnight", async t => {
   t.mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-10-22T23:59:59.900Z") });
   const { handlers, state, events } = logFixture();
   state.beforeRun = () => t.mock.timers.tick(200);
   await handlers.test({ logs: true, noTrace: true });
-  const query = events.find(e => typeof e === "string" && e.includes("FROM ApexLog"));
+  const query = events.find(e => typeof e === "string" && e.includes("FROM ApexLog") && e.includes("LIMIT 10"));
   assert.match(query, /StartTime >= 2026-10-22T23:54:59Z AND StartTime <= 2026-10-23T00:05:01Z ORDER BY/);
 });
 
@@ -390,6 +456,7 @@ test("test --logs includes clock-skew boundaries and excludes logs outside the p
     { Id: "after", StartTime: "2026-10-23T00:05:01.001Z" }
   ];
   conn.query = async query => {
+    if (query.startsWith("SELECT Id FROM ApexLog")) return { records: [] };
     const bounds = query.match(/StartTime >= (\S+) AND StartTime <= (\S+)/);
     assert.ok(bounds, query);
     for (const bound of bounds.slice(1)) assert.match(bound, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
