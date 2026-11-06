@@ -1,30 +1,69 @@
 # Changelog
 
-## Unreleased
-
-- feat: expose plugin CLI tables through direct commands, help, agent snippets and rewrite hooks; add table validation, JSON Schema and `plugin init` generation (experimental v0).
-
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
-## [Unreleased]
+## [0.6.0] - 2026-11-06
+
+This release has the same code as 0.5.5, which was published with the wrong
+version number. These changes add features and change default behavior, so
+they need a minor version bump.
 
 ### Added
 
-- Experimental plugin host: sf registry discovery, isolated warm workers, `op` and `plugin list`, plan/apply effects checks, progress, cancellation and auth invalidation.
+- Experimental plugin support (v0). sfd finds plugins in the `sf` plugin
+  registry and runs their operations in isolated warm worker processes. Workers
+  support plan/apply, progress reporting and cancellation, and they are
+  restarted when org auth changes. New commands: `sfd op <id>` and
+  `sfd plugin list [--json]`.
+- Plugins can declare CLI tables, which make their operations available as
+  direct `sfd` commands. These commands appear in `sfd help`, in
+  `sfd agents-snippet` output and in agent rewrite hooks. Tables are validated
+  against a published JSON Schema and cached when `sfd plugin list` runs.
+- `sfd plugin init [<plugin-root>] [--ops <id,…>] [--write]` generates a
+  plugin's CLI table.
+- New `@syntax-syllogism/sfd-plugin` package containing the v0 operation
+  contract types, runtime validators (`/validate`) and a test kit (`/testkit`)
+  for plugin authors.
+- Safety policy based on effects. Built-in commands and plugin operations are
+  classified as `read`, `local-write`, `org-write` or `destructive`, and the
+  policy decides whether to allow, ask or deny based on the target org type
+  (scratch, sandbox, production or unknown). The policy can be customized with
+  a file at `SFD_POLICY` (default `~/.config/sfd/policy.json`). See
+  `docs/safety.md`.
+- Org write confirmations. When the policy decision is "ask", the command
+  stops with exit code 4 and prints a confirmation hash. Re-run the command
+  with `--confirm <hash>` to proceed. The hash can be used once and expires
+  after 10 minutes. With `--json`, the response includes an
+  `approvalRequired` object.
+- `sfd org --json` now includes a top-level `type`, and `sfd org list --json`
+  adds `safetyType`.
 
-- Experimental v0 plugin operation contract, runtime validators and test kit in `@syntax-syllogism/sfd-plugin`, with declaration checks in CI.
+### Changed
 
-- `sfd test -y/--synchronous` runs tests from one Apex class without the async queue, with coverage and debug-log support
+- **Org writes to production and unknown orgs now need confirmation by
+  default.** This covers `deploy` (including `--check-only`), anonymous `apex`,
+  and REST `POST`/`PATCH`/`PUT`. REST `DELETE` needs confirmation on sandbox,
+  production and unknown orgs. Scripts that make these calls must add
+  `--confirm <hash>` or relax the policy.
+- The Claude and Codex rewrite hooks ask the harness for permission when a
+  rewritten command's policy decision is ask or deny. This includes plugin
+  commands, which are checked against the effects they declare.
+- npm releases are published with npm trusted publishing (OIDC), so no
+  `NPM_TOKEN` is needed.
 
 ### Fixed
 
-- Plugin `/validate` and `/testkit` TypeScript exports now match their runtime helpers.
-- `sfd test --logs` no longer returns debug logs from earlier runs within the clock-skew window.
-- Agent hooks preserve synchronous test execution and leave invalid synchronous selectors with `sf`
-- Test summaries omit the run ID suffix when no run ID is available
+- The TypeScript declarations for the plugin `/validate` and `/testkit`
+  subpaths now match their runtime exports.
+- Hook and runtime code paths now guard `process.getuid` on Windows.
+
+## [0.5.5] - 2026-11-06
+
+Published by mistake. It contains the same changes as 0.6.0; use 0.6.0
+instead.
 
 ## [0.5.4] - 2026-11-05
 
@@ -35,6 +74,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `sfd test --logs` excludes debug logs that existed before the test run
+- Agent hooks preserve synchronous test execution and leave invalid synchronous selectors with `sf`
+- Test summaries omit the run ID suffix when no run ID is available
 
 ## [0.5.3] - 2026-10-29
 
