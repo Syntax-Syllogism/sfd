@@ -6,11 +6,15 @@ import { call, isRunning, startDaemon, DaemonError, VERSION } from "../src/clien
 import { findProjectDir, resolveTargetOrg } from "../src/project.mjs";
 import { formatMetadataTypes, formatMetadataList, formatOrgList, formatApex, formatLog, formatLogList, formatDeploy, formatTests, formatRetrieve, formatTracking, toCsv } from "../src/format.mjs";
 import { paths } from "../src/paths.mjs";
-import { commandHelp, commandUsage } from "../src/commands.mjs";
+import { COMMANDS, commandHelp, commandUsage } from "../src/commands.mjs";
 import { helpUsageError, renderCommandManual, renderGuide, renderHelpIndex } from "../src/help-topics.mjs";
 import { snippet, upsertSnippet } from "../src/snippet.mjs";
 import { UsageError } from "../src/usage-error.mjs";
 import { synchronousTestError } from "../src/test-options.mjs";
+
+import { loadTable } from "../src/plugin/table-cache.mjs";
+import { matchCommand, parseCommand, pluginManual, formatPlugin } from "../src/plugin/cli-table.mjs";
+import { initCliTable } from "../src/plugin/init.mjs";
 
 import { SF_JSON_COMMANDS, sfEnvelope, sfError } from "../src/sf-json.mjs";
 
@@ -24,15 +28,20 @@ ${commandHelp()}
 Common options:
   -o, --target-org <alias>  Org alias or username (default: sf target-org config)
   --json                    Print the raw JSON response
+  --confirm <hash>          Confirm a policy approval (single use, 10 min)
   --version                 Print the sfd version
   -h, --help                Show this help
 
 Run 'sfd help <command|guide>' for full documentation.
 
-Exit codes: 0 success, 1 operation failed, 2 usage error, 3 daemon error.`;
+Exit codes: 0 success, 1 operation failed, 2 usage error, 3 daemon error, 4 approval required or policy denied.`;
 
 const options = {
   "target-org": { type: "string", short: "o" },
+  confirm: { type: "string" },
+  quiet: { type: "boolean" },
+  plan: { type: "boolean" },
+  "options-json": { type: "string" },
   write: { type: "boolean" },
   json: { type: "boolean" },
   "sf-json": { type: "boolean" },
@@ -121,9 +130,9 @@ async function run(argv) {
     if (values.help) { print(commandUsage("help")); return 0; }
     if (values.all && values.guides) throw new UsageError("sfd help accepts only one of --all or --guides.");
     if ((values.all || values.guides) && positionals.length) throw new UsageError("sfd help --all and --guides do not accept a topic.");
-    if (!positionals.length) { print(renderHelpIndex({ guidesOnly: values.guides })); return 0; }
+    if (!positionals.length) { print(renderHelpIndex({ guidesOnly: values.guides, table: loadTable() })); return 0; }
     const topic = positionals.join(" ");
-    const manual = renderCommandManual(topic);
+    const manual = renderCommandManual(topic, loadTable());
     if (manual !== undefined) { print(manual); return 0; }
     const guide = renderGuide(topic);
     if (guide !== undefined) { print(guide); return 0; }
@@ -147,10 +156,55 @@ async function run(argv) {
     print(values.json ? report : formatReport(report));
     return 0;
   }
+  if (argv[0] === "plugin" && argv[1] === "init") {
+    const { values, positionals } = parseArgs({ args: argv.slice(2), allowPositionals: true, options: {
+      ops: { type: "string" }, write: { type: "boolean" }, help: { type: "boolean", short: "h" }
+    } });
+    if (values.help) { print("sfd plugin init [<plugin-root>] [--ops <id,…>] [--write]"); return 0; }
+    if (positionals.length > 1) throw new UsageError("plugin init accepts at most one plugin root.");
+    const { table, review } = await initCliTable(positionals[0] ?? process.cwd(), { ops: values.ops?.split(","), write: values.write });
+    print(table);
+    for (const line of review) process.stderr.write(`review: ${line}\n`);
+    return 0;
+  }
+  // Select the command before parsing: plugin flags are independent of built-ins.
+  if (argv[0] && !argv[0].startsWith("-") && !COMMANDS.some(c => c.name.split(" ")[0] === argv[0])) {
+    const command = matchCommand(argv, loadTable());
+    if (command) {
+      const { values, options: operationOptions } = parseCommand(argv, command);
+      if (values.help) { print(pluginManual(command)); return 0; }
+      let targetOrg;
+      try { targetOrg = resolveTargetOrg(values["target-org"], process.cwd()); } catch {}
+      let lastProgress = 0;
+      const res = await call("plugin", { operation: command.operation, options: operationOptions, targetOrg,
+        apiVersion: values["api-version"], cwd: process.cwd(), confirm: values.confirm, mode: values.plan ? "plan" : "apply" }, { onEvent: event => {
+        if (!values.quiet && event.event === "progress" && Date.now() - lastProgress >= 250) {
+          lastProgress = Date.now(); process.stderr.write(`progress: ${event.phase ?? ""} ${event.message ?? ""}\n`);
+        }
+      } });
+      if (res.status !== 0) return responseError(res, values);
+      const result = res.result;
+      if (values.json) print(result);
+      else if (result.policy) {
+        print(result.data);
+        process.stderr.write(`policy: ${result.policy.decision}\n`);
+        if (result.policy.hash) process.stderr.write(`re-run with: --confirm ${result.policy.hash}   (valid 10 min)\n`);
+      }
+      else if (result.ok) {
+        print(await formatPlugin(result.data, command));
+        for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
+        if (result.truncated) process.stderr.write(`… result truncated (total ${result.total ?? "unknown"})\n`);
+      } else {
+        process.stderr.write(`${result.code}: ${result.message}\n`);
+        for (const action of result.actions) process.stderr.write(`  → ${action}\n`);
+      }
+      return result.ok ? 0 : result.code === "usage" ? 2 : 1;
+    }
+  }
   const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
   let [command, ...rest] = positionals;
   if (values.help && command) {
-    const key = ["logs get", "org list"].find(name => name === `${command} ${rest[0]}`) ?? command;
+    const key = ["logs get", "org list", "plugin list"].find(name => name === `${command} ${rest[0]}`) ?? command;
     const usage = commandUsage(key);
     if (usage) { print(usage); return 0; }
     throw new UsageError(`Unknown command: ${command}. Run sfd --help.`);
@@ -173,7 +227,7 @@ async function run(argv) {
     if (rest.length > 1 || (rest.length && !values.write)) {
       throw new UsageError("agents-snippet accepts --write [file].");
     }
-    const block = snippet();
+    const block = snippet(loadTable());
     if (!values.write) { print(block); return 0; }
     const root = findProjectDir(cwd) ?? cwd;
     const file = rest[0] ?? ["AGENTS.md", "CLAUDE.md"].find(name => existsSync(resolve(root, name))) ?? "AGENTS.md";
@@ -195,6 +249,53 @@ async function run(argv) {
     return 0;
   }
 
+  if (command === "op" || command === "plugin") {
+    if (command === "plugin" && (rest.length !== 1 || rest[0] !== "list")) throw new UsageError("Use sfd plugin list [--json].");
+    if (command === "op" && rest.length !== 1) throw new UsageError("op needs exactly one operation id.");
+    let lastProgress = 0;
+    const onEvent = event => {
+      if (values.quiet) return;
+      if (event.event === "progress" && Date.now() - lastProgress >= 250) {
+        lastProgress = Date.now();
+        process.stderr.write(`progress: ${event.phase ?? ""} ${event.done ?? ""}/${event.total ?? ""} ${event.message ?? ""}\n`);
+      }
+    };
+    let args = {};
+    if (command === "op") {
+      const spec = values["options-json"];
+      let operationOptions = {};
+      if (spec !== undefined) {
+        const text = spec === "-" ? readStdin() : spec.startsWith("@") ? readInputFile(spec.slice(1)) : spec;
+        try { operationOptions = JSON.parse(text); } catch { throw new UsageError("--options-json must contain valid JSON."); }
+      }
+      let targetOrg;
+      try { targetOrg = org(); } catch { /* Org-free operations do not need a default. */ }
+      args = { operation: rest[0], options: operationOptions, targetOrg, cwd, confirm: values.confirm, mode: values.plan ? "plan" : "apply" };
+    }
+    const res = await call(command === "op" ? "plugin" : "pluginList", args, { onEvent });
+    if (res.status !== 0) return responseError(res, values);
+    const result = res.result;
+    if (command === "plugin") {
+      print(values.json ? result : result.map(p => `${p.name} ${p.version}  ${p.root}  ${p.operations.map(o => `${o.id} [${o.effects.join(",")}]`).join("; ")}  ${p.worker}${p.rss ? ` (${Math.round(p.rss / 1024 / 1024)} MiB)` : ""}${p.problems.length ? `  ${p.problems.join("; ")}` : ""}`).join("\n"));
+      return 0;
+    }
+    if (values.json) print(result);
+    else if (result.policy) {
+      print(result.data);
+      process.stderr.write(`policy: ${result.policy.decision}\n`);
+      if (result.policy.hash) process.stderr.write(`re-run with: --confirm ${result.policy.hash}   (valid 10 min)\n`);
+    }
+    else if (result.ok) {
+      print(JSON.stringify(result.data) ?? "null");
+      for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
+      if (result.truncated) process.stderr.write(`… result truncated (total ${result.total ?? "unknown"})\n`);
+    } else {
+      process.stderr.write(`${result.code}: ${result.message}\n`);
+      for (const action of result.actions) process.stderr.write(`  → ${action}\n`);
+    }
+    return result.ok ? 0 : result.code === "usage" ? 2 : 1;
+  }
+
   // Lifecycle commands.
   switch (command) {
     case "start":
@@ -212,7 +313,7 @@ async function run(argv) {
       if (!(await isRunning())) { print(values.json ? { running: false } : "sfd not running"); return 0; }
       const res = await call("status", {}, { autoStart: false });
       const s = { running: true, version: VERSION, socket: paths().socket, log: paths().log, ...res.result };
-      print(values.json ? s : `sfd ${VERSION} running (pid ${s.pid}, up ${s.uptimeSeconds}s), orgs: ${s.orgs.join(", ") || "none"}\nlog: ${s.log}`);
+      print(values.json ? s : `sfd ${VERSION} running (pid ${s.pid}, up ${s.uptimeSeconds}s), orgs: ${s.orgs.join(", ") || "none"}\nlog: ${s.log}${s.plugins?.length ? `\nplugins: ${s.plugins.map(p => `${p.name} ${p.worker}${p.rss ? ` ${Math.round(p.rss / 1024 / 1024)} MiB` : ""}`).join(", ")}` : ""}`);
       return 0;
     }
     case "reload": {
@@ -346,6 +447,7 @@ async function run(argv) {
       throw new UsageError(`Unknown command: ${command}. Run sfd --help.`);
   }
 
+  if (values.confirm !== undefined) req.confirm = values.confirm;
   const res = await call(command, req);
   if (values["sf-json"]) {
     const envelope = sfEnvelope(command, res);
@@ -356,6 +458,7 @@ async function run(argv) {
   if (trace) {
     process.stderr.write(`sfd: enabled debug logging for ${trace.username} until ${trace.expires} (TraceFlag ${trace.id})\n`);
   }
+  if (res.exitCode === 4) return responseError(res, values);
   if (values.json) { print(command === "orgList" && res.status === 0 ? { orgs: res.result.orgs } : res); return res.status === 0 ? okStatus(command, res.result) : res.name === "UsageError" ? 2 : 1; }
   if (res.status !== 0) {
     process.stderr.write(`${res.name}: ${res.message}\n`);
@@ -369,6 +472,17 @@ async function run(argv) {
     (values.csv ? process.stderr : process.stdout).write(trailer);
   }
   return okStatus(command, res.result);
+}
+
+function responseError(res, values) {
+  const exitCode = res.exitCode ?? (res.name === "UsageError" ? 2 : 1);
+  if (values.json) print(res.approvalRequired ? { status: 4, approvalRequired: res.approvalRequired } : { ...res, status: exitCode });
+  else {
+    process.stderr.write(`sfd: ${res.message}\n`);
+    if (res.summary) process.stderr.write(`plan: ${res.summary}\n`);
+    if (res.approvalRequired) process.stderr.write(`re-run with: --confirm ${res.approvalRequired.hash}   (valid 10 min)\n`);
+  }
+  return exitCode;
 }
 
 // A request can succeed while the Salesforce operation fails (compile error, failed deploy or test).

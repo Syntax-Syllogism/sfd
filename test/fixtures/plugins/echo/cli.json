@@ -1,0 +1,28 @@
+{
+  "apiVersion": 0,
+  "commands": [
+    {
+      "operation": "echo.say",
+      "name": [
+        "echo",
+        "say"
+      ],
+      "sf": [
+        "echo",
+        "say"
+      ],
+      "summary": "Echo text",
+      "agentTip": "--text <text>: echo text",
+      "flags": [
+        {
+          "name": "text",
+          "char": "t",
+          "type": "string",
+          "option": "text",
+          "required": true
+        }
+      ],
+      "formatter": "json"
+    }
+  ]
+}

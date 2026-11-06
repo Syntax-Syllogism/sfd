@@ -79,6 +79,10 @@ Mapped documentation passes through `rewriteDocLinks()` after any section
 extraction, so command manuals use the same CLI help references as guides.
 Agent tips omit the leading `: ` separator used by entries without arguments.
 
+Plugin tables add grouped commands to the index and flag manuals to topic
+resolution. Namespace topics list their commands. Descriptor summaries and
+effects are refreshed by `sfd plugin list`; see [plugins.md](plugins.md).
+
 ## Keeping it in sync
 
 - New concept guide: add `docs/<name>.md` with an H1 and a one-line first

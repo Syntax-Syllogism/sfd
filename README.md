@@ -13,6 +13,9 @@ has no Salesforce dependencies of its own: the daemon loads
 the `sf` install on `PATH`. Auth, aliases, API versions and the metadata
 registry therefore always match what `sf` uses.
 
+Run installed plugin operations with [the plugin host](docs/plugins.md).
+Plugin authors: see the [experimental v0 operation contract](docs/plugin-api.md).
+
 ## Install
 
 ```bash
@@ -47,6 +50,9 @@ version.
 | `sfd hook <agent>`, `check`, `install`, `uninstall` | Agent integration: rewrite `sf` commands before an agent runs them. See [docs/agent-hooks.md](docs/agent-hooks.md) | |
 | `sfd agents-snippet [--write [file]]` | Print agent instructions, or write them into `AGENTS.md` or `CLAUDE.md`. See [Using sfd with coding agents](#using-sfd-with-coding-agents) | |
 | `sfd discover [--since 30d]` | Report missed sfd opportunities and adoption from local agent transcripts. See [docs/discover.md](docs/discover.md) | |
+| `sfd op <id> [--options-json <json\|@file\|->] [--plan]` | Run a plugin operation or preview its plan; `--quiet` suppresses progress | |
+| `sfd plugin list [--json]` | Plugins, operations, effects and worker memory | |
+| `sfd plugin init [<plugin-root>] [--ops <id,…>] [--write]` | Draft a plugin's `cli.json` from its operations and oclif manifest; review notes go to stderr. See [plugin command tables](#plugin-command-tables) | |
 | `sfd start \| stop \| status \| reload` | Daemon lifecycle; `reload` drops cached orgs and auth state | |
 
 For agents, `--csv --limit 200` is the cheapest way to read rows. The limit,
@@ -107,7 +113,9 @@ filtering, status checks and the JSON allowlist are described in
 
 Exit codes: `0` success, `1` the operation failed (including a compile error,
 a failed deploy, or a failing test), `2` usage error, `3` the daemon could
-not be reached or started, or a request timed out. Unreadable input files are
+not be reached or started, or a request timed out, `4` approval required or policy denied.
+Production writes require a single-use `--confirm <hash>`; see
+[Safety policy](docs/safety.md). Unreadable input files are
 usage errors and include the file path.
 
 Use `sf` (with `--json` when scripting) for anything sfd does not cover (org creation, package
@@ -180,6 +188,7 @@ filtered output format and `test --logs` behavior are in
 | `SFD_TIMEOUT_SECONDS` | Positive request deadline in seconds, including connection time. Overrides defaults: 3 seconds for health/lifecycle requests; 120 seconds for other operations, extended to at least the deploy/retrieve/test `-w` wait plus 60 seconds (default waits: 33/33/60 minutes). Increase this for long queries or queued deploys. Timeout exits 3. |
 | `SFD_IDLE_MINUTES` | Idle timeout, default 60. |
 | `SFD_RUNTIME_DIR` | Socket, log and pid directory (on Windows, log and pid only; the pipe name is derived from it). |
+| `SFD_POLICY` | Safety policy file path, default `~/.config/sfd/policy.json`. See [Safety policy](docs/safety.md). |
 | `SFD_SF_ROOT` | `@salesforce/cli` install to load libraries from, instead of the `sf` on `PATH`. |
 | `SFD_HANDLERS_MODULE` | Test seam: stub handlers module used by the CLI tests. |
 | `SFD_HOOK_SHELL` | Force hook parsing and quoting to `posix` or `powershell`. Invalid values disable rewriting. Gemini defaults to PowerShell on Windows; Codex on native Windows requires an explicit override. |
@@ -278,3 +287,11 @@ The block's contents and marker rules are described in
 
 For automatic command rewriting, install a hook with
 `sfd hook install --agent <agent>` (see [Agent integration](#agent-integration)).
+
+### Plugin command tables
+
+Plugins with an `sfd.cli` table expose direct commands, help, agent tips and
+strict `sf` hook rewrites, such as `sfd echo say --text hi`. Authors can run
+`sfd plugin init [root] [--ops <id,…>] [--write]` to draft a table from their
+operations and oclif manifest. Review its stderr notes before committing it.
+See [plugins](docs/plugins.md) and the [CLI contract](docs/plugin-api.md#cli-table).

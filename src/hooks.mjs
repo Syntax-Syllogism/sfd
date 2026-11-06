@@ -1,8 +1,10 @@
+import { loadTable } from "./plugin/table-cache.mjs";
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, renameSync, unlinkSync, statSync, constants } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import { rewrite } from "./rewrite.mjs";
+import { builtinEffects, loadPolicy, decide, effectiveOrgType } from "./policy.mjs";
 import { UsageError } from "./usage-error.mjs";
 
 const USAGE = "Usage: sfd hook claude|codex|gemini|check [--shell posix|powershell] <command>|install|uninstall --agent <agent> [--project]";
@@ -19,6 +21,21 @@ export function hookShell(agent, env = process.env, platform = process.platform)
   return platform === "win32" && agent === "gemini" ? "powershell" : "posix";
 }
 
+function approvalReason(calls, env, platform) {
+  try {
+    const policy = loadPolicy({ env });
+    const dir = env.SFD_RUNTIME_DIR ?? (platform === "win32" ? join(env.LOCALAPPDATA ?? tmpdir(), "sfd") : join(env.XDG_RUNTIME_DIR ?? tmpdir(), `sfd-${process.getuid?.() ?? "user"}`));
+    let cached = {};
+    try { cached = JSON.parse(readFileSync(join(dir, "org-types.json"), "utf8")); } catch {}
+    for (const { operation, args, effects } of calls) {
+      const alias = args.org ?? env.SF_TARGET_ORG;
+      const type = effectiveOrgType(cached[alias], policy, cached.$usernames?.[alias] ?? alias, alias);
+      const result = decide(effects ?? builtinEffects(operation, args), type, policy);
+      if (result.decision !== "allow") return `sfd: ${result.effect} on ${type} org (${alias ?? "default"}); policy ${result.decision}`;
+    }
+  } catch { return "sfd: cannot validate safety policy; approval required"; }
+}
+
 export function handle(agent, inputJson, env = process.env, platform = process.platform) {
   try {
     if (env.SFD_HOOK_DISABLE === "1") return "";
@@ -29,14 +46,15 @@ export function handle(agent, inputJson, env = process.env, platform = process.p
     if (!input.tool_input || typeof input.tool_input.command !== "string") return "";
     const shell = hookShell(agent, env, platform);
     if (shell === null) return "";
-    const result = rewrite(input.tool_input.command, { shell });
+    const result = rewrite(input.tool_input.command, { shell, table: loadTable({ env }), includePolicy: true });
     if (result.skip) return "";
     const updatedInput = { ...input.tool_input, command: result.command };
     if (agent === "gemini") return JSON.stringify({ hookSpecificOutput: { tool_input: updatedInput } });
+    const reason = approvalReason(result.policyCalls ?? [], env, platform);
     return JSON.stringify({ hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      ...(agent === "codex" ? { permissionDecision: "allow" } : {}),
-      permissionDecisionReason: result.reason,
+      ...(reason ? { permissionDecision: "ask" } : agent === "codex" ? { permissionDecision: "allow" } : {}),
+      permissionDecisionReason: reason ?? result.reason,
       updatedInput
     } });
   } catch { return ""; }
@@ -102,7 +120,7 @@ export function runHook(argv) {
       if (!["posix", "powershell"].includes(shell)) throw new UsageError("Expected --shell posix|powershell");
     }
     const result = process.env.SFD_HOOK_DISABLE === "1" ? { skip: "SFD_HOOK_DISABLE=1" }
-      : shell === null ? { skip: "invalid SFD_HOOK_SHELL" } : rewrite(args.join(" "), { shell });
+      : shell === null ? { skip: "invalid SFD_HOOK_SHELL" } : rewrite(args.join(" "), { shell, table: loadTable() });
     process.stdout.write(result.skip ? `skip: ${result.skip}\n` : `→ ${result.command}\n`);
     return result.skip ? 1 : 0;
   }

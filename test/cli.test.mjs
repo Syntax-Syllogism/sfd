@@ -2,7 +2,7 @@ import { socketPath } from '../src/paths.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, cpSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,8 @@ const env = {
   SFD_RUNTIME_DIR: runtime,
   SFD_SF_ROOT: sfRoot,
   SFD_HANDLERS_MODULE: fileURLToPath(new URL("./fixtures/stub-handlers.mjs", import.meta.url)),
+  SFD_PLUGIN_PATHS_ONLY: "1",
+  SFD_PLUGIN_PATHS: fileURLToPath(new URL("./fixtures/plugins/echo", import.meta.url)),
   SF_TARGET_ORG: "stub-org"
 };
 const sfd = (args, input) => spawnSync(process.execPath, [bin, ...args], { env, input, encoding: "utf8" });
@@ -386,4 +388,116 @@ test("synchronous flags and selectors reach the daemon and preserve test exit co
     const failed = sfd(["test", "-y", "-t", "A.one", "--logs", ...json]);
     assert.equal(failed.status, 1, failed.stderr);
   }
+});
+
+
+test("plugin CLI runs operations, previews and applies plans, reads files and stdin", () => {
+  const first = sfd(["op", "echo.say", "--options-json", '{"text":"hi"}', "--json"]);
+  assert.equal(first.status, 0, first.stderr);
+  const envelope = JSON.parse(first.stdout); assert.equal(envelope.ok, true); assert.equal(envelope.data.text, "hi");
+  assert.equal(JSON.parse(sfd(["op", "echo.say", "--json"]).stdout).data.pid, envelope.data.pid);
+  const file = join(runtime, "options.json"); writeFileSync(file, '{"text":"file"}');
+  assert.equal(JSON.parse(sfd(["op", "echo.say", "--options-json", `@${file}`]).stdout).text, "file");
+  assert.equal(JSON.parse(sfd(["op", "echo.say", "--options-json", "-"], '{"text":"stdin"}').stdout).text, "stdin");
+  assert.equal(JSON.parse(sfd(["op", "echo.write", "--plan"]).stdout).summary, "echo write");
+  assert.equal(JSON.parse(sfd(["op", "echo.say"]).stdout).applied, 0);
+  assert.equal(JSON.parse(sfd(["op", "echo.write"]).stdout).applied, 1);
+  assert.equal(sfd(["op", "echo.overreach"]).status, 1);
+  assert.equal(sfd(["op", "echo.say", "--plan"]).status, 2);
+  assert.equal(sfd(["op", "echo.say", "--options-json", "bad"]).status, 2);
+  const unknown = sfd(["op", "echo.sa"]); assert.equal(unknown.status, 1); assert.match(unknown.stderr, /echo.say/);
+  const list = sfd(["plugin", "list", "--json"]); assert.equal(list.status, 0, list.stderr);
+  assert.ok(JSON.parse(list.stdout).some(p => p.name === "sfd-plugin-echo" && p.rss > 0));
+  assert.match(sfd(["op", "echo.slow"]).stderr, /progress: wait/);
+  assert.equal(sfd(["op", "echo.slow", "--quiet"]).stderr, "");
+  assert.equal(JSON.parse(sfd(["op", "echo.whoami", "-o", "alias"]).stdout).username, "alias@example.com");
+});
+
+
+test("plugin command dispatch, help, hook, snippet and generator", () => {
+  const result = sfd(["echo", "say", "--text", "hi"]);
+  assert.equal(result.status, 0, JSON.stringify(result));
+  assert.equal(JSON.parse(result.stdout).text, "hi");
+  const json = sfd(["echo", "say", "--text", "hi", "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).data.text, "hi");
+  for (const args of [["echo", "say", "--help"], ["help", "echo", "say"]]) {
+    const help = sfd(args); assert.equal(help.status, 0, help.stderr);
+    assert.match(help.stdout, /--text.*required/);
+  }
+  assert.equal(sfd(["echo", "say"]).status, 2);
+  assert.equal(sfd(["echo", "say", "--text", "hi", "--unknown"]).status, 2);
+  assert.match(sfd(["agents-snippet"]).stdout, /sfd echo say/);
+  const hook = sfd(["hook", "check", "sf echo say --text hi"]);
+  assert.equal(hook.status, 0, hook.stderr);
+  assert.match(hook.stdout, /sfd echo say/);
+  const generated = sfd(["plugin", "init", env.SFD_PLUGIN_PATHS, "--ops", "echo.say"]);
+  assert.equal(generated.status, 0, generated.stderr);
+  assert.equal(JSON.parse(generated.stdout).apiVersion, 0);
+  assert.match(generated.stderr, /review:/);
+});
+
+test("approval errors preserve exit 4, stderr, JSON and sf envelopes through daemon IPC", () => {
+  const args = ["apex", "-o", "policy-prod"];
+  const body = "System.debug('policy');";
+  const first = sfd([...args, "--json"], body);
+  assert.equal(first.status, 4, first.stderr);
+  const response = JSON.parse(first.stdout);
+  assert.equal(response.status, 4);
+  assert.equal(response.approvalRequired.effect, "org-write");
+  assert.equal(response.approvalRequired.orgType, "production");
+  const hash = response.approvalRequired.hash;
+  assert.match(hash, /^[a-f0-9]{12}$/);
+  const text = sfd(args, body);
+  assert.equal(text.status, 4);
+  assert.match(text.stderr, /approval required: org-write on production/);
+  assert.match(text.stderr, /plan:/);
+  assert.ok(text.stderr.includes(`--confirm ${hash}`));
+  const sf = sfd([...args, "--sf-json"], body);
+  assert.equal(sf.status, 4);
+  assert.equal(JSON.parse(sf.stdout).name, "ApprovalRequired");
+  assert.equal(JSON.parse(sf.stdout).exitCode, 4);
+  assert.equal(sf.stderr, "");
+  assert.equal(sfd([...args, "--confirm", hash], body).status, 0);
+  assert.equal(sfd([...args, "--confirm", hash], body).status, 4);
+  const denied = sfd(["apex", "-o", "policy-deny", "--confirm", hash, "--json"], body);
+  assert.equal(denied.status, 4);
+  assert.equal(JSON.parse(denied.stdout).name, "PolicyDenied");
+  assert.equal(JSON.parse(denied.stdout).approvalRequired, undefined);
+});
+
+test("direct plugin commands keep exit 4, the confirm hint and single-use --confirm", t => {
+  // A private copy of the echo plugin with a direct write command and its own daemon.
+  const root = mkdtempSync(join(tmpdir(), "sfd-echo-write-"));
+  cpSync(env.SFD_PLUGIN_PATHS, root, { recursive: true });
+  const table = JSON.parse(readFileSync(join(root, "cli.json"), "utf8"));
+  table.commands.push({ operation: "echo.write", name: ["echo", "write"], summary: "Echo write", flags: [], formatter: "json" });
+  writeFileSync(join(root, "cli.json"), JSON.stringify(table));
+  const local = { ...env, SFD_RUNTIME_DIR: mkdtempSync(join(tmpdir(), "sfd-cli-direct-")), SFD_PLUGIN_PATHS: root };
+  const sfd = (args, input) => spawnSync(process.execPath, [bin, ...args], { env: local, input, encoding: "utf8" });
+  t.after(() => sfd(["stop"]));
+  const args = ["echo", "write", "-o", "policy-prod"];
+  const blocked = sfd(args);
+  assert.equal(blocked.status, 4, blocked.stderr);
+  const hash = /--confirm ([a-f0-9]{12})/.exec(blocked.stderr)?.[1];
+  assert.ok(hash, blocked.stderr);
+  const json = sfd([...args, "--json"]);
+  assert.equal(json.status, 4);
+  assert.equal(JSON.parse(json.stdout).approvalRequired.hash, hash);
+  const preview = sfd([...args, "--plan"]);
+  assert.equal(preview.status, 0, preview.stderr);
+  assert.match(preview.stderr, /policy: ask/);
+  assert.equal(sfd([...args, "--confirm", hash]).status, 0);
+  assert.equal(sfd([...args, "--confirm", hash]).status, 4);
+});
+
+test("plugin CLI --plan issues a hash and --confirm applies through the host gate", () => {
+  const args = ["op", "echo.write", "-o", "policy-prod", "--options-json", '{"n":7}'];
+  assert.equal(sfd(args).status, 4);
+  const preview = sfd([...args, "--plan", "--json"]);
+  assert.equal(preview.status, 0, preview.stderr);
+  const { policy } = JSON.parse(preview.stdout);
+  assert.equal(policy.decision, "ask");
+  assert.equal(sfd([...args, "--confirm", policy.hash]).status, 0);
+  assert.equal(sfd([...args, "--confirm", policy.hash]).status, 4);
 });

@@ -2,5 +2,6 @@
 import { execFileSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 
-const files = ["bin/sfd.mjs", ...readdirSync("src", { recursive: true }).filter(f => f.endsWith(".mjs")).map(f => `src/${f}`)];
+const pluginFiles = readdirSync("packages/sfd-plugin", { recursive: true }).filter(f => f.endsWith(".mjs")).map(f => `packages/sfd-plugin/${f}`);
+const files = ["bin/sfd.mjs", ...pluginFiles, ...readdirSync("src", { recursive: true }).filter(f => f.endsWith(".mjs")).map(f => `src/${f}`)];
 for (const f of files) execFileSync(process.execPath, ["--check", f], { stdio: "inherit" });

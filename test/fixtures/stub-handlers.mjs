@@ -1,6 +1,13 @@
 // Stand-in for src/handlers.mjs so the CLI and daemon lifecycle can be tested without an org.
-export function createHandlers() {
+import { createPluginHandler } from "../../src/plugin/handler.mjs";
+import { checkPolicy, loadPolicy } from "../../src/policy.mjs";
+import { paths } from "../../src/paths.mjs";
+import { serial, metadataSuggestion } from "../../src/handlers.mjs";
+export function createHandlers(root, { supervisor } = {}) {
   return {
+    ...(supervisor ? { plugin: createPluginHandler({ supervisor, projectQueue: serial(), suggest: metadataSuggestion,
+      policyCheck: input => input.alias === "policy-prod" ? checkPolicy({ ...input, policy: loadPolicy(), runtimeDir: paths().dir }) : { decision: "allow" },
+      resolveOrg: async alias => ({ alias, username: `${alias}@example.com`, apiVersion: "62.0", type: "unknown" }) }) } : {}),
     org: async ({ org }) => ({ alias: org }),
     orgList: async args => {
       if ("org" in args) throw new Error("Unexpected target org");
@@ -25,9 +32,17 @@ export function createHandlers() {
       }
       return { totalSize: 1, done: true, records: [{ org, q, ...(raw ? { attributes: { type: "Account" } } : {}) }] };
     },
-    apex: async ({ body }) => body.includes("bad")
-      ? { compiled: false, success: false, diagnostic: [{ compileProblem: "Unexpected token", lineNumber: 1, columnNumber: 1 }] }
-      : { compiled: true, success: true, logs: "x|USER_DEBUG|[1]|DEBUG|hi" },
+    apex: async ({ body, org, confirm }) => {
+      if (org === "policy-prod" || org === "policy-deny") {
+        const policy = loadPolicy();
+        if (org === "policy-deny") policy.rules.production["org-write"] = "deny";
+        checkPolicy({ operation: "apex", username: "user@example.com", alias: org, options: { org, body },
+          effects: ["org-write"], orgType: "production", policy, runtimeDir: paths().dir, confirm });
+      }
+      return body.includes("bad")
+        ? { compiled: false, success: false, diagnostic: [{ compileProblem: "Unexpected token", lineNumber: 1, columnNumber: 1 }] }
+        : { compiled: true, success: true, logs: "x|USER_DEBUG|[1]|DEBUG|hi" };
+    },
     deploy: async ({ sourcePaths }) => ({ success: true, sourcePaths }),
     retrieve: async args => {
       if (args.org === "untracked") throw Object.assign(new Error("retrieve needs -d, -m or -x on an org without source tracking."), { name: "UsageError" });

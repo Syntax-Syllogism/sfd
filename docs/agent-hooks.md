@@ -208,3 +208,16 @@ local transcripts. A rule change therefore moves its rewritable and skipped
 counts. See [discover.md](discover.md).
 
 Run `npm test` before committing.
+
+Plugin `cli.json` mappings follow built-ins and use the same strict flag and
+shell rules. They come from the runtime table cache without worker startup;
+see [plugins.md](plugins.md#direct-commands-and-agent-integration).
+
+## Safety policy decisions
+
+For rewritten calls requiring approval or denied by policy, Claude and Codex
+return `permissionDecision: "ask"` with a reason. They never auto-allow such a
+call. The hook reads only local policy and cached org types; missing types use
+unknown (production rules). The daemon still enforces exit code 4 and
+`--confirm`. Gemini keeps its existing response shape. See [Safety policy](safety.md)
+for configuration and agent permission rules.

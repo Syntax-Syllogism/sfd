@@ -102,3 +102,28 @@ test("server preserves a multibyte request split between writes", async t => {
   });
   assert.equal(response.result, "café ☕");
 });
+
+
+test("server emits event lines before the final response", async t => {
+  const { socket } = await server(t, { handlers: { stream: async (req, { emit }) => {
+    emit({ event: "progress", phase: "start" }); return "done";
+  } } });
+  const lines = await new Promise((resolve, reject) => {
+    const conn = net.connect(socket, () => conn.write('{"op":"stream","v":"1"}\n'));
+    let buf = ""; conn.on("data", c => { buf += c; }); conn.on("error", reject);
+    conn.on("end", () => resolve(buf.trim().split("\n").map(line => JSON.parse(line))));
+  });
+  assert.deepEqual(lines, [{event:"progress",phase:"start"},{status:0,result:"done"}]);
+});
+
+test("client disconnect aborts an active handler", async t => {
+  let entered, aborted;
+  const started = new Promise(r => { entered = r; });
+  const cancelled = new Promise(r => { aborted = r; });
+  const { socket } = await server(t, { handlers: { slow: async (req, { signal }) => {
+    entered(); await new Promise(r => signal.addEventListener("abort", () => { aborted(); r(); }, {once:true}));
+    return "cancelled";
+  } } });
+  const conn = net.connect(socket, () => conn.write('{"op":"slow","v":"1"}\n'));
+  await started; conn.destroy(); await cancelled;
+});

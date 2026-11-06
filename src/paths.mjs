@@ -10,7 +10,7 @@ export function runtimeDir(env = process.env, platform = process.platform) {
     mkdirSync(base, { recursive: true });
     return base;
   }
-  const base = env.SFD_RUNTIME_DIR ?? join(env.XDG_RUNTIME_DIR ?? tmpdir(), `sfd-${process.getuid()}`);
+  const base = env.SFD_RUNTIME_DIR ?? join(env.XDG_RUNTIME_DIR ?? tmpdir(), `sfd-${process.getuid?.() ?? "user"}`);
   mkdirSync(base, { recursive: true, mode: 0o700 });
   chmodSync(base, 0o700);
   return base;

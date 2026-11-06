@@ -1,0 +1,1 @@
+{"name": "sfd-plugin-echo", "version": "1.0.0", "type": "module", "sfd": {"apiVersion": 0, "operations": "./ops.mjs", "cli": "./cli.json"}}

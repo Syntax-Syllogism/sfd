@@ -6,6 +6,9 @@ import { paths } from "./paths.mjs";
 import { findSfRoot, sfInfo } from "./sf-root.mjs";
 import { pathToFileURL } from "node:url";
 
+import { createDiscovery } from "./plugin/discover.mjs";
+import { createSupervisor } from "./plugin/supervisor.mjs";
+
 const log = (...args) => console.error(new Date().toISOString(), ...args);
 const p = paths();
 const sf = sfInfo(findSfRoot());
@@ -14,7 +17,14 @@ const sf = sfInfo(findSfRoot());
 // import() needs a file URL for absolute Windows paths such as C:\\...
 const handlersModule = process.env.SFD_HANDLERS_MODULE ? pathToFileURL(process.env.SFD_HANDLERS_MODULE).href : "./handlers.mjs";
 const { createHandlers } = await import(handlersModule);
-const handlers = createHandlers(sf.root);
+const configuredIdle = Number(process.env.SFD_PLUGIN_IDLE_MINUTES ?? 30);
+const supervisor = createSupervisor({ discover: createDiscovery(), idleMs: (Number.isFinite(configuredIdle) && configuredIdle > 0 ? configuredIdle : 30) * 60_000, log });
+const handlers = createHandlers(sf.root, { supervisor, onAuthChanged: () => supervisor.authChanged() });
+handlers.pluginList = () => supervisor.list();
+const status = handlers.status;
+handlers.status = async req => ({ ...await status(req), plugins: await supervisor.status() });
+process.on("SIGTERM", () => { supervisor.shutdown(); process.exit(0); });
+process.on("SIGINT", () => { supervisor.shutdown(); process.exit(0); });
 
 // An sf upgrade rewrites its package.json; finish in-flight work and let the next call start fresh.
 const isStale = () => {
@@ -29,6 +39,7 @@ try {
     idleMs: Number(process.env.SFD_IDLE_MINUTES ?? 60) * 60_000,
     isStale,
     onExit: reason => {
+      supervisor.shutdown();
       log(`exiting (${reason})`);
       try { if (readFileSync(p.pid, "utf8").trim() === String(process.pid)) unlinkSync(p.pid); } catch {}
       setTimeout(() => process.exit(0), 100);

@@ -138,6 +138,26 @@ export const COMMANDS = [
     "agentGroup": "agents"
   },
   {
+    name: "op",
+    args: "<id> [--options-json <json|@file|->] [--plan] [--quiet]",
+    summary: "Run a plugin operation or preview its plan",
+    agentTip: "<id> [--plan]: run a plugin operation",
+    agentGroup: "agents",
+    targetOrg: true,
+    json: true,
+    docs: [{ file: "plugins.md" }]
+  },
+  {
+    name: "plugin list",
+    args: "",
+    summary: "List plugin operations, effects, worker state and problems",
+    agentTip: ": plugins and worker status",
+    agentGroup: "agents",
+    targetOrg: false,
+    json: true,
+    docs: [{ file: "plugins.md" }]
+  },
+  {
     "name": "start",
     "args": "",
     "summary": "Start the daemon",
@@ -175,6 +195,7 @@ export const COMMANDS = [
 ];
 
 export function commandHelp() {
+  /** @type {{name: string, args: string, summary: string}[]} */
   const commands = COMMANDS.filter(command => command.agentGroup !== "lifecycle");
   commands.push({
     name: "start | stop | status | reload",
@@ -197,6 +218,7 @@ export function commandUsage(name) {
   const commonOptions = [
     ...(command.targetOrg === false ? [] : ["  -o, --target-org <alias>  Select the target org"]),
     ...(command.json === false ? [] : ["  --json                    Print the raw JSON response"]),
+    ...(["apex", "deploy", "rest", "retrieve", "op"].includes(name) ? ["  --confirm <hash>          Confirm a policy approval (single use, 10 min)"] : []),
     "  -h, --help                Show this help"
   ];
   const specificOptions = name === "help" ? [

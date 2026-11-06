@@ -24,6 +24,31 @@ function run(args, input, dir, env = {}) {
     env: { ...process.env, HOME: dir, SFD_RUNTIME_DIR: join(dir, "runtime"), SFD_HOOK_DISABLE: "", SFD_HOOK_SHELL: "posix", ...env }
   });
 }
+test("REST hooks preserve implicit-body calls and ask for explicit production writes", t => {
+  const dir = temporary(t);
+  const env = { SFD_RUNTIME_DIR: dir, SFD_POLICY: join(dir, "policy.json") };
+  writeFileSync(join(dir, "org-types.json"), JSON.stringify({ prod: "production" }));
+  for (const agent of ["claude", "codex"]) {
+    for (const shell of ["posix", "powershell"]) {
+      const check = command => handle(agent, JSON.stringify({ tool_name: "Bash", tool_input: { command } }), { ...env, SFD_HOOK_SHELL: shell }, "linux");
+      for (const bodyFlag of ["--body", "-b"]) {
+        for (const method of ["", "-X GET"]) {
+          assert.equal(check(`sf api request rest /path ${bodyFlag} 'hello' ${method} -o prod`), "");
+        }
+      }
+      for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+        const output = JSON.parse(check(`sf api request rest /path -X ${method} --body 'hello' -o prod`)).hookSpecificOutput;
+        assert.equal(output.permissionDecision, "ask");
+        assert.match(output.permissionDecisionReason, /(?:org-write|destructive) on production/);
+      }
+      for (const method of ["", "-X GET", "-X HEAD"]) {
+        const output = JSON.parse(check(`sf api request rest /path ${method} -o prod`)).hookSpecificOutput;
+        assert.equal(output.permissionDecision, agent === "codex" ? "allow" : undefined);
+      }
+    }
+  }
+});
+
 for (const [agent, config] of Object.entries(configs)) {
   const input = { tool_name: config.tool, hook_event_name: config.event, tool_input: { command: 'sf data query -q "SELECT Id" --json', timeout: 5000, description: "query", run_in_background: true } };
   const updatedInput = { ...input.tool_input, command: "sfd query 'SELECT Id'" };
@@ -54,7 +79,7 @@ for (const [agent, config] of Object.entries(configs)) {
     const disabled = run([agent], JSON.stringify(input), dir, { SFD_HOOK_DISABLE: "1" });
     assert.equal(disabled.status, 0);
     assert.equal(disabled.stdout, "");
-    assert.equal(existsSync(join(dir, "runtime")), false);
+    for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(dir, "runtime", file)), false);
   });
   test(`${agent}: CLI rewrites CSV queries without a daemon`, t => {
     const dir = temporary(t);
@@ -66,7 +91,7 @@ for (const [agent, config] of Object.entries(configs)) {
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, "");
     assert.deepEqual(JSON.parse(result.stdout), csvExpected);
-    assert.equal(existsSync(join(dir, "runtime")), false);
+    for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(dir, "runtime", file)), false);
   });
   for (const project of [false, true]) test(`${agent}: ${project ? "project" : "user"} install and uninstall preserve settings`, t => {
     const dir = temporary(t), cwd = join(dir, "project"), home = join(dir, "home");
@@ -123,7 +148,7 @@ for (const [agent, config] of Object.entries(configs)) {
       if (agent === "codex") assert.match(result.stdout, /trust.*\/hooks/);
       assert.equal(run(["uninstall", "--agent", agent, ...scope], "", dir).status, 0);
     }
-    assert.equal(existsSync(join(dir, "runtime")), false);
+    for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(dir, "runtime", file)), false);
   });
 }
 test("unknown agents have no opinion", () => assert.equal(handle("unknown", "{}"), ""));
@@ -175,7 +200,7 @@ test("check accepts a shell option, defaults to the environment and rejects inva
   assert.match(invalidEnv.stdout, /invalid SFD_HOOK_SHELL/);
   const pipeline = run(["check", "--shell", "powershell", "sf org display --json | jq ."], "", dir);
   assert.equal(pipeline.status, 1);
-  assert.equal(existsSync(join(dir, "runtime")), false);
+  for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(dir, "runtime", file)), false);
 });
 test("hook help succeeds without starting a daemon", t => {
   const dir = temporary(t);
@@ -185,7 +210,7 @@ test("hook help succeeds without starting a daemon", t => {
     assert.match(result.stdout, /^Usage: sfd hook /);
     assert.equal(result.stderr, "");
   }
-  assert.equal(existsSync(join(dir, "runtime")), false);
+  for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(dir, "runtime", file)), false);
 });
 test("missing and invalid hook usage exits 2 without starting a daemon", t => {
   const dir = temporary(t);
@@ -195,7 +220,7 @@ test("missing and invalid hook usage exits 2 without starting a daemon", t => {
     assert.equal(result.stdout, "");
     assert.notEqual(result.stderr, "");
   }
-  assert.equal(existsSync(join(dir, "runtime")), false);
+  for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(dir, "runtime", file)), false);
 });
 test("check reports rewrite or skip and never starts daemon", t => {
   const dir = temporary(t);
@@ -211,5 +236,5 @@ test("check reports rewrite or skip and never starts daemon", t => {
   const disabled = run(["check", "sf org display"], "", dir, { SFD_HOOK_DISABLE: "1" });
   assert.equal(disabled.status, 1);
   assert.match(disabled.stdout, /SFD_HOOK_DISABLE/);
-  assert.equal(existsSync(join(dir, "runtime")), false);
+  for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(dir, "runtime", file)), false);
 });

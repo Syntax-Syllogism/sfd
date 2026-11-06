@@ -1,10 +1,13 @@
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { paths } from "./paths.mjs";
+import { builtinEffects, policyLoader, checkPolicy, writeOrgTypes, decide, effectiveOrgType } from "./policy.mjs";
 import { UsageError } from "./usage-error.mjs";
 import { sfRequire } from "./sf-root.mjs";
 import { asArray, compactDescribe, compactQuery, summarizeDeploy, summarizeTests, summarizeRetrieve, summarizeChanges } from "./format.mjs";
 
+import { createPluginHandler } from "./plugin/handler.mjs";
 import { pick, orgEntry } from "./sf-json.mjs";
 
 function scratchDetails(row) {
@@ -108,7 +111,7 @@ function authStamp(home) {
 
 // One queue for operations that touch the local project (deploy and source tracking):
 // SDR and source-tracking keep process-wide state, so they must not interleave.
-function serial() {
+export function serial() {
   let tail = Promise.resolve();
   return fn => {
     const run = tail.then(fn, fn);
@@ -117,7 +120,7 @@ function serial() {
   };
 }
 
-function metadataSuggestion(name, names) {
+export function metadataSuggestion(name, names) {
   const input = name.toLowerCase();
   const distance = candidate => {
     let row = Array.from({ length: input.length + 1 }, (_, i) => i);
@@ -135,7 +138,7 @@ function metadataSuggestion(name, names) {
       .sort((a, b) => a.distance - b.distance)[0]?.name;
 }
 
-export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRoot) } = {}) {
+export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRoot), supervisor, env = process.env, onAuthChanged = () => {} } = {}) {
   const req = load;
   const core = req("@salesforce/core");
   const { Duration } = req("@salesforce/kit");
@@ -146,6 +149,17 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
   const projectQueue = serial();
 
   const orgs = new Map();
+  const safetyTypes = new Map();
+  const cachedTypes = Object.create(null);
+  const cachedUsernames = Object.create(null);
+  const runtimeDir = () => paths(env).dir;
+  const getPolicy = policyLoader({ home, env });
+  function clearSafetyTypes() {
+    safetyTypes.clear();
+    for (const key of Object.keys(cachedTypes)) delete cachedTypes[key];
+    for (const key of Object.keys(cachedUsernames)) delete cachedUsernames[key];
+    writeOrgTypes(runtimeDir(), cachedTypes);
+  }
   const typeCache = new Map();
   const traces = new Map();
   const traceQueue = serial();
@@ -164,9 +178,11 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
     const now = authStamp(home);
     if (now !== stamp) {
       stamp = now;
+      onAuthChanged();
       orgs.clear();
       traces.clear();
       typeCache.clear();
+      clearSafetyTypes();
       refreshing = core.StateAggregator.clearInstanceAsync();
       try { await refreshing; } finally { refreshing = undefined; }
     }
@@ -192,9 +208,33 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       orgs.delete(alias);
       traces.delete(alias);
       typeCache.delete(alias);
+      clearSafetyTypes();
       const org = await getOrg(alias);
       return fn(org.getConnection(), org);
     }
+  }
+
+  async function orgType(alias) {
+    const org = await getOrg(alias);
+    const username = org.getUsername();
+    if (!safetyTypes.has(username)) {
+      const pending = (async () => {
+        try {
+          const auth = await core.AuthInfo.create({ username });
+          const fields = auth.getFields();
+          if (fields.expirationDate || fields.devHubUsername) return "scratch";
+          const result = await withConn(alias, conn => conn.query("SELECT IsSandbox, OrganizationType, TrialExpirationDate FROM Organization"));
+          const row = result.records?.[0];
+          return row?.IsSandbox === true ? "sandbox" : row?.IsSandbox === false ? "production" : "unknown";
+        } catch { return "unknown"; }
+      })();
+      safetyTypes.set(username, pending);
+    }
+    const type = await safetyTypes.get(username);
+    cachedTypes[username] = type;
+    if (alias) { cachedTypes[alias] = type; cachedUsernames[alias] = username; }
+    writeOrgTypes(runtimeDir(), { ...cachedTypes, $usernames: cachedUsernames });
+    return type;
   }
 
   async function metadataTypes(alias, conn) {
@@ -212,7 +252,17 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
     return { types: await versions.get(apiVersion), apiVersion, cached };
   }
 
-  return {
+  const plugin = supervisor && createPluginHandler({ supervisor, projectQueue, refreshAuth: refreshIfAuthChanged,
+    suggest: metadataSuggestion,
+    policyCheck: input => checkPolicy({ ...input, policy: getPolicy(), runtimeDir: runtimeDir() }),
+    resolveOrg: async alias => {
+      const org = await getOrg(alias);
+      const conn = org.getConnection();
+      return { alias, username: org.getUsername(), apiVersion: conn.getApiVersion(), instanceUrl: conn.instanceUrl, type: await orgType(alias) };
+    }
+  });
+  const handlers = {
+    ...(plugin ? { plugin } : {}),
     ping: async () => ({ pong: true }),
 
     status: async () => ({
@@ -222,15 +272,17 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
     }),
 
     reload: async () => {
+      onAuthChanged();
       orgs.clear();
       traces.clear();
       typeCache.clear();
+      clearSafetyTypes();
       await core.StateAggregator.clearInstanceAsync();
       return { reloaded: true };
     },
 
     org: ({ org, raw }) => withConn(org, async (conn, o) => {
-      if (!raw) return { alias: org, username: o.getUsername(), orgId: o.getOrgId(), instanceUrl: conn.instanceUrl, apiVersion: conn.getApiVersion() };
+      if (!raw) return { type: await orgType(org), alias: org, username: o.getUsername(), orgId: o.getOrgId(), instanceUrl: conn.instanceUrl, apiVersion: conn.getApiVersion() };
       const auth = await core.AuthInfo.create({ username: o.getUsername() });
       const fields = auth.getFields();
       const state = await core.StateAggregator.getInstance();
@@ -248,7 +300,7 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       return result;
     }),
 
-    orgList: async ({ all = false, status = false, raw = false } = {}) => {
+    orgList: async ({ all = false, status = false, raw = false, confirm } = {}) => {
       await refreshIfAuthChanged();
       const state = await core.StateAggregator.getInstance();
       const config = await core.ConfigAggregator.create();
@@ -279,6 +331,7 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
           const org = {
             alias: state.aliases.getAll(username)[0] ?? null, username,
             orgId: fields.orgId, instanceUrl: fields.instanceUrl,
+            safetyType: scratch ? "scratch" : cachedTypes[username] ?? "unknown",
             type: scratch ? "Scratch" : fields.isDevHub ? "DevHub" : fields.isSandbox ? "Sandbox" : "Org",
             isDefault: defaultOrg, isDefaultDevHub: isDefault(username, "target-dev-hub")
           };
@@ -343,6 +396,13 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       const listed = readable.map(entry => entry.org);
       const visible = all ? listed : listed.filter(org => !org.expired);
       visible.sort((a, b) => (a.alias ?? "").localeCompare(b.alias ?? "") || a.username.localeCompare(b.username));
+      const policy = getPolicy();
+      const restricted = visible.map(org => ({ org, type: effectiveOrgType(org.safetyType, policy, org.username, org.alias) }))
+        .map(entry => ({ ...entry, decision: decide(["read"], entry.type, policy).decision }))
+        .sort((a, b) => ["deny", "ask", "allow"].indexOf(a.decision) - ["deny", "ask", "allow"].indexOf(b.decision))[0];
+      checkPolicy({ operation: "orgList", username: restricted?.org.username, alias: restricted?.org.alias,
+        orgType: restricted?.type, effects: ["read"], policy, runtimeDir: runtimeDir(), confirm,
+        options: { all, status, usernames: visible.map(org => org.username) } });
       return { orgs: raw ? visible.map(org => {
         const data = readable.find(entry => entry.org === org).raw;
         if (org.type !== "Scratch" && org.status) data.connectedStatus = org.status;
@@ -552,4 +612,21 @@ export function createHandlers(sfRoot, { home = homedir(), load = sfRequire(sfRo
       });
     })
   };
+  for (const [operation, handler] of Object.entries(handlers)) {
+    if (["plugin", "ping", "status", "reload", "orgList"].includes(operation)) continue;
+    handlers[operation] = async (args, transport) => {
+      const policy = getPolicy();
+      const effects = builtinEffects(operation, args);
+      // Default reads need no org lookup; custom read restrictions still apply.
+      if (effects[0] !== "read" || Object.values(policy.rules).some(row => row.read !== "allow")) {
+        const org = await getOrg(args.org);
+        const { confirm, op, v, raw, ...options } = args;
+        checkPolicy({ operation, username: org.getUsername(), alias: args.org, options, effects,
+          orgType: await orgType(args.org), policy, runtimeDir: runtimeDir(), confirm });
+      }
+      else checkPolicy({ operation, options: {}, effects, policy });
+      return handler(args, transport);
+    };
+  }
+  return handlers;
 }

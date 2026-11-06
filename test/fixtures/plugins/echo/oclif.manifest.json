@@ -1,0 +1,30 @@
+{
+  "commands": {
+    "echo:say": {
+      "flags": {
+        "text": {
+          "type": "option",
+          "char": "t",
+          "required": true
+        },
+        "loud": {
+          "type": "boolean"
+        },
+        "tag": {
+          "type": "option",
+          "multiple": true,
+          "exclusive": [
+            "loud"
+          ]
+        },
+        "json": {
+          "type": "boolean"
+        },
+        "target-org": {
+          "type": "option",
+          "char": "o"
+        }
+      }
+    }
+  }
+}

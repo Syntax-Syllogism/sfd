@@ -16,8 +16,9 @@ function fixture() {
   const modules = {
     "@salesforce/core": {
       Org: { create: async () => { calls.orgs++; return {
-        getConnection: () => conn, tracksSource: async () => state.tracks
+        getUsername: () => "fixture", getConnection: () => conn, tracksSource: async () => state.tracks
       }; } },
+      AuthInfo: { create: async () => ({ getFields: () => ({ devHubUsername: "hub" }) }) },
       StateAggregator: { clearInstanceAsync: async () => { calls.clears++; } },
       SfProject: {
         clearInstances: () => { cachedProject = undefined; },
@@ -73,7 +74,7 @@ function fixture() {
       async runTestAsynchronous(...args) { state.beforeRun?.(); calls.runs.push(args); return state.testResult ?? { summary: {} }; }
     } }
   };
-  return { handlers: createHandlers(undefined, { home, load: name => {
+  return { handlers: createHandlers(undefined, { home, env: { SFD_RUNTIME_DIR: join(home, "runtime"), SFD_POLICY: join(home, "policy.json") }, load: name => {
     assert.ok(modules[name], name); return modules[name];
   } }), conn, calls, state, home, projectFile };
 }
@@ -567,7 +568,7 @@ function orgListFixture(t) {
       };
     } }
   };
-  const handlers = createHandlers("unused", { home, load: name => name === "@salesforce/core" ? core : {} });
+  const handlers = createHandlers("unused", { home, env: { SFD_RUNTIME_DIR: join(home, "runtime"), SFD_POLICY: join(home, "policy.json") }, load: name => name === "@salesforce/core" ? core : {} });
   t.after(async () => { const { rmSync } = await import("node:fs"); rmSync(home, { recursive: true, force: true }); });
   return { handlers, fields, aliases, defaults, calls, behavior, home, setListingError: error => { listingError = error; } };
 }
@@ -595,7 +596,7 @@ test("org list reads local primary users, resolves aliases/defaults, filters exp
   assert.equal(result.orgs.find(o => o.username === "default-secondary").type, "Sandbox");
   assert.deepEqual(result.orgs.find(o => o.username === "primary"), {
     alias: "hub", username: "primary", orgId: "00D000000000001AAA", instanceUrl: "https://example",
-    type: "DevHub", isDefault: false, isDefaultDevHub: true
+    type: "DevHub", safetyType: "unknown", isDefault: false, isDefaultDevHub: true
   });
   assert.equal(warnings.length, 1);
   assert.doesNotMatch(JSON.stringify([result, warnings]), /access-secret|refresh-secret|client-secret|list-secret|secret auth failure|accessToken|refreshToken|clientSecret/);
@@ -805,13 +806,13 @@ test('raw apex expands library diagnostics into sf error data', async () => {
   const expected = sfCapture('apex-compile-error');
   const data = expected.data;
   const modules = {
-    '@salesforce/core': { Org: { create: async () => ({ getConnection: () => ({}) }) } },
+    '@salesforce/core': { Org: { create: async () => ({ getUsername: () => 'scratch', getConnection: () => ({}) }) }, AuthInfo: { create: async () => ({ getFields: () => ({ devHubUsername: 'hub' }) }) } },
     '@salesforce/kit': {},
     '@salesforce/apex-node': { ExecuteService: class { async executeAnonymous() {
       return { success: data.success, compiled: data.compiled, logs: data.logs, diagnostic: [{ lineNumber: data.line, columnNumber: data.column, compileProblem: data.compileProblem, exceptionMessage: data.exceptionMessage, exceptionStackTrace: data.exceptionStackTrace }] };
     } } }
   };
-  const handlers = createHandlers('unused', { home: '/nonexistent', load: name => modules[name] });
+  const handlers = createHandlers('unused', { home: '/nonexistent', env: { SFD_RUNTIME_DIR: mkdtempSync(join(tmpdir(), 'sfd-raw-apex-')) }, load: name => modules[name] });
   const { sfEnvelope } = await import('../src/sf-json.mjs');
   const { stack, cause, ...envelope } = expected;
   assert.deepEqual(sfEnvelope('apex', { status: 0, result: await handlers.apex({ org: 'scratch', body: 'bad', raw: true }) }), envelope);

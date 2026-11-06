@@ -9,7 +9,7 @@ export { VERSION } from "./version.mjs";
 
 export class DaemonError extends Error {}
 
-function send(socket, req, timeoutMs) {
+function send(socket, req, timeoutMs, onEvent) {
   return new Promise((resolve, reject) => {
     const conn = net.connect(socket);
     conn.setEncoding("utf8");
@@ -17,9 +17,28 @@ function send(socket, req, timeoutMs) {
     conn.on("close", () => clearTimeout(timer));
     let buf = "";
     conn.on("connect", () => conn.write(JSON.stringify(req) + "\n"));
-    conn.on("data", chunk => (buf += chunk));
+    let response;
+    let parseError;
+    const parseLine = line => {
+      try {
+        const value = JSON.parse(line);
+        if (value && typeof value === "object" && "event" in value) onEvent?.(value);
+        else response = value;
+      } catch (e) { parseError = e; }
+    };
+    conn.on("data", chunk => {
+      buf += chunk;
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        if (line.trim()) parseLine(line);
+      }
+    });
     conn.on("end", () => {
-      try { resolve(JSON.parse(buf)); } catch { reject(new DaemonError(`Bad response from sfd: ${buf.slice(0, 200)}`)); }
+      if (buf.trim()) parseLine(buf);
+      if (parseError || response === undefined) reject(new DaemonError(`Bad response from sfd: ${buf.slice(0, 200)}`));
+      else resolve(response);
     });
     conn.on("error", reject);
   });
@@ -47,7 +66,7 @@ async function waitForSocket(socket, timeoutMs) {
 }
 
 // Send one request, starting the daemon if needed and replacing it once on a version mismatch.
-export async function call(op, args = {}, { env = process.env, autoStart = true, startTimeoutMs = 30_000 } = {}) {
+export async function call(op, args = {}, { env = process.env, autoStart = true, startTimeoutMs = 30_000, onEvent } = {}) {
   const p = paths(env);
   const req = { ...args, op, v: PROTOCOL };
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -59,7 +78,7 @@ export async function call(op, args = {}, { env = process.env, autoStart = true,
       const timeoutMs = Number.isFinite(configured) && configured > 0
         ? configured * 1000
         : health ? 3000 : Math.max(120_000, waitMinutes * 60_000 + 60_000);
-      res = await send(p.socket, req, timeoutMs);
+      res = await send(p.socket, req, timeoutMs, onEvent);
     } catch (e) {
       if (!autoStart || !["ENOENT", "ECONNREFUSED"].includes(e.code)) throw e;
       startDaemon(env);

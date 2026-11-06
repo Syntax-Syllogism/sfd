@@ -63,8 +63,18 @@ const mappings = [
   { sf: "org display", sfd: "org", flags: [org, json] }
 ];
 
-function mapArgs(argv, quoteValue) {
-  const mapping = mappings.find(m => m.sf.split(" ").every((v, i) => argv[i] === v));
+export function allMappings(table = { plugins: [] }) {
+  const plugin = table.plugins.flatMap(p => p.commands.filter(c => c.sf).map(c => ({
+    sf: c.sf.join(" "), sfd: c.name.join(" "), plugin: true, effects: c.effects?.length ? c.effects : ["org-write"],
+    requiredFlags: c.flags.filter(f => f.required).map(f => f.name),
+    flags: [org, ["json", "--json", false], ["api-version", "--api-version", true], ...c.flags.filter(f => !["target-org", "json", "api-version"].includes(f.name)).map(f =>
+      [[f.char, f.name].filter(Boolean).join(" "), `--${f.name}`, f.type !== "boolean", f.multiple])]
+  })));
+  return [...mappings, ...plugin.sort((a, b) => b.sf.split(" ").length - a.sf.split(" ").length)];
+}
+
+function mapArgs(argv, quoteValue, table) {
+  const mapping = allMappings(table).find(m => m.sf.split(" ").every((v, i) => argv[i] === v));
   if (!mapping) return skip("unsupported sf command");
   const args = argv.slice(mapping.sf.split(" ").length);
   const seen = new Map(), output = [], positionals = [];
@@ -89,11 +99,11 @@ function mapArgs(argv, quoteValue) {
       }
     } else if (match[3] !== undefined) return skip(`unsupported boolean value ${arg}`);
     seen.set(key, multiple ? [...(seen.get(key) ?? []), ...values] : values);
-    if (key === "r") {
+    if (!mapping.plugin && key === "r") {
       if (mapping.sfd === "query" && values[0] === "csv") output.push("--csv");
       else if (!["human", "json"].includes(values[0])) return skip(`unsupported result format ${values[0]}`);
     }
-    if (key === "w" && (!Number.isFinite(Number(values[0])) || Number(values[0]) <= 0)) return skip("wait must be positive");
+    if (!mapping.plugin && key === "w" && (!Number.isFinite(Number(values[0])) || Number(values[0]) <= 0)) return skip("wait must be positive");
     if (target) {
       if (takesValue) for (const v of values) output.push(target, quoteValue(v));
       else output.push(target);
@@ -101,6 +111,10 @@ function mapArgs(argv, quoteValue) {
   }
   if (mapping.sfd === "org list" && !seen.has("skip-connection-status")) output.push("--status");
   if (mapping.required && !seen.has(mapping.required)) return skip(`missing required ${mapping.required} flag`);
+  for (const name of mapping.requiredFlags ?? []) {
+    const key = mapping.flags.find(f => f[0].split(" ").includes(name))[0].split(" ")[0];
+    if (!seen.has(key)) return skip(`missing required --${name} flag`);
+  }
   if (mapping.sfd === "list-metadata" && !seen.has("m")) return skip("metadata listing needs metadata-type");
   if (mapping.sfd === "deploy" && !seen.has("d") && !seen.has("m")) return skip("deploy needs source-dir or metadata");
   if (mapping.sfd === "retrieve" && ["d", "m", "x"].filter(key => seen.has(key)).length > 1) return skip("retrieve selectors are mutually exclusive");
@@ -129,15 +143,15 @@ function mapArgs(argv, quoteValue) {
   const positional = logTarget ? [logTarget] : mapping.required ? seen.get(mapping.required) : positionals;
   // Protect sfd's own option parser from values that could be interpreted as options.
   if (positional.some(v => v.startsWith("-"))) return skip("unsupported positional value");
-  return { command: ["sfd", mapping.sfd, ...positional.map(quoteValue), ...output].join(" "), apex: mapping.sfd === "apex", subcommand: mapping.sfd, json: seen.has("json"), format: seen.has("r"), file: seen.has("f") };
+  return { command: ["sfd", mapping.sfd, ...positional.map(quoteValue), ...output].join(" "), policyCall: { operation: mapping.sfd, args: { org: seen.get("o")?.[0], method: seen.get("X")?.[0] }, ...(mapping.plugin ? { effects: mapping.effects } : {}) }, apex: mapping.sfd === "apex", subcommand: mapping.sfd, json: seen.has("json"), format: seen.has("r"), file: seen.has("f") };
 }
 
-export function rewrite(command, { shell = "posix" } = {}) {
+export function rewrite(command, { shell = "posix", table, includePolicy = false } = {}) {
   if (typeof command !== "string" || !command.trim()) return skip("empty command");
   try {
-    if (shell === "powershell") return rewritePowerShell(command);
-    if (shell === "posix") return rewriteShell(command);
-    return skip("unsupported shell");
+    const result = shell === "powershell" ? rewritePowerShell(command, table) : shell === "posix" ? rewriteShell(command, table) : skip("unsupported shell");
+    if (!includePolicy) delete result.policyCalls;
+    return result;
   } catch (error) { return skip(error.message); }
 }
 
@@ -173,7 +187,7 @@ function lexPowerShell(source) {
   return words;
 }
 
-function rewritePowerShell(command) {
+function rewritePowerShell(command, table) {
   // Keep a strict subset that passes the same values through PowerShell 5.1 and 7.
   const source = command.replace(/^[ \t]+/, "").replace(/[ \t]*(?:\r?\n)?[ \t]*$/, "");
   if (/[\r\n\x00-\x08\x0b-\x1f\u2018-\u201e]/.test(source) || source.includes("--%")) return skip("unsupported PowerShell syntax");
@@ -183,13 +197,13 @@ function rewritePowerShell(command) {
     if (!value || value.includes('"') || value.endsWith("\\")) throw Error("unsafe PowerShell native argument");
     return `'${value.replaceAll("'", "''")}'`;
   };
-  const mapped = mapArgs(words.slice(1), quotePowerShell);
+  const mapped = mapArgs(words.slice(1), quotePowerShell, table);
   if (mapped.skip) return mapped;
   if (mapped.apex && !mapped.file) return skip("PowerShell apex run needs a file");
-  return { command: mapped.command, reason: "sfd: warm daemon, ~0.3 s", rewritten: 1, skipped: [] };
+  return { command: mapped.command, reason: "sfd: warm daemon, ~0.3 s", rewritten: 1, skipped: [], policyCalls: [mapped.policyCall] };
 }
 
-function rewriteElement(text, consumed, stdin, whole) {
+function rewriteElement(text, consumed, stdin, whole, table) {
   let continued = "", single = false, double = false;
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
@@ -226,7 +240,7 @@ function rewriteElement(text, consumed, stdin, whole) {
       i++;
     } else return skip("unsupported redirection");
   }
-  const mapped = mapArgs(words, quote);
+  const mapped = mapArgs(words, quote, table);
   if (mapped.skip) return mapped;
   if ((stdin || heredoc) && !mapped.apex) return skip("stdin is supported only for apex run");
   if (consumed) {
@@ -236,12 +250,13 @@ function rewriteElement(text, consumed, stdin, whole) {
     if (mapped.subcommand === "org list" && words.includes("--skip-connection-status")) mapped.command += " --skip-connection-status";
     mapped.command = mapped.command.replace(/ --json\b/, "") + " --sf-json";
   }
+  if (!mapped.policyCall.args.org && start) mapped.policyCall.args.org = tokens[0].value.slice("SF_TARGET_ORG=".length);
   const prefix = head.slice(0, tokens[start].start);
   const trailing = heredoc && firstLine >= 0 ? "" : firstLine < 0 ? text.match(/\s*$/)[0] : text.slice(firstLine);
-  return { command: prefix + mapped.command + redirects.map(r => ` ${r}`).join("") + (heredoc ? ` ${heredoc}` : "") + trailing };
+  return { policyCall: mapped.policyCall, command: prefix + mapped.command + redirects.map(r => ` ${r}`).join("") + (heredoc ? ` ${heredoc}` : "") + trailing };
 }
 
-function rewriteShell(command) {
+function rewriteShell(command, table) {
   if (/SF_TEMP_SHOW_SECRETS/i.test(command)) return skip("consumer may read a token sfd never prints");
   const parsed = split(command);
   if (parsed.skip) return parsed;
@@ -251,14 +266,14 @@ function rewriteShell(command) {
       const text = command.slice(element.start, element.end);
       if (!/^\s*(?:SF_TARGET_ORG=(?:'[^']*'|"[^"]*"|\S+)\s+)?(?:sf|'sf'|"sf")(?=\s|$)/.test(text)) continue;
       let result;
-      try { result = rewriteElement(text, index < segment.elements.length - 1, index > 0, command); }
+      try { result = rewriteElement(text, index < segment.elements.length - 1, index > 0, command, table); }
       catch (error) { result = skip(error.message); }
       if (result.skip) skipped.push(result.skip);
-      else replacements.push({ ...element, text: result.command });
+      else replacements.push({ ...element, text: result.command, policyCall: result.policyCall });
     }
   }
   if (!replacements.length) return skip(skipped[0] ?? "not a plain sf invocation (paths, env prefixes and sfdx are unsupported)");
   let output = command;
   for (const { start, end, text } of replacements.toReversed()) output = output.slice(0, start) + text + output.slice(end);
-  return { command: output, reason: replacements.length > 1 ? `sfd: rewrote ${replacements.length} calls; warm daemon, ~0.3 s` : "sfd: warm daemon, ~0.3 s", rewritten: replacements.length, skipped };
+  return { command: output, reason: replacements.length > 1 ? `sfd: rewrote ${replacements.length} calls; warm daemon, ~0.3 s` : "sfd: warm daemon, ~0.3 s", rewritten: replacements.length, skipped, policyCalls: replacements.map(r => r.policyCall) };
 }

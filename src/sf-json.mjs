@@ -31,12 +31,12 @@ export const sfJson = {
 };
 const contexts = { query: 'DataSoqlQueryCommand', describe: 'Describe', apex: 'Run', org: 'OrgDisplayCommand', orgList: 'OrgListCommand' };
 export function sfError(command, error, exitCode = 1) {
-  const name = error.errorCode ?? error.name ?? 'Error';
+  const name = exitCode === 4 ? error.name : error.errorCode ?? error.name ?? 'Error';
   const context = contexts[command] ?? command;
   return { name, message: error.message, exitCode, context, ...(error.data ? { data: error.data } : error.errorCode ? { data: { message: error.message, errorCode: error.errorCode } } : {}), ...(error.actions ? { actions: error.actions } : {}), warnings: [], code: error.errorCode ? '1' : name, status: exitCode, commandName: context };
 }
 export function sfEnvelope(command, response) {
-  if (response.status !== 0) return sfError(command, response, response.name === 'UsageError' || response.name === 'NamedOrgNotFoundError' ? 2 : 1);
+  if (response.status !== 0) return sfError(command, response, response.exitCode === 4 ? 4 : response.name === 'UsageError' || response.name === 'NamedOrgNotFoundError' ? 2 : 1);
   const result = sfJson[command](response.result);
   if (command === 'apex' && (!result.compiled || !result.success)) {
     result.line = String(result.line); result.column = String(result.column);

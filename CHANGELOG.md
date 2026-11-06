@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- feat: expose plugin CLI tables through direct commands, help, agent snippets and rewrite hooks; add table validation, JSON Schema and `plugin init` generation (experimental v0).
+
 All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
@@ -9,10 +13,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Experimental plugin host: sf registry discovery, isolated warm workers, `op` and `plugin list`, plan/apply effects checks, progress, cancellation and auth invalidation.
+
+- Experimental v0 plugin operation contract, runtime validators and test kit in `@syntax-syllogism/sfd-plugin`, with declaration checks in CI.
+
 - `sfd test -y/--synchronous` runs tests from one Apex class without the async queue, with coverage and debug-log support
 
 ### Fixed
 
+- Plugin `/validate` and `/testkit` TypeScript exports now match their runtime helpers.
 - `sfd test --logs` no longer returns debug logs from earlier runs within the clock-skew window.
 - Agent hooks preserve synchronous test execution and leave invalid synchronous selectors with `sf`
 - Test summaries omit the run ID suffix when no run ID is available

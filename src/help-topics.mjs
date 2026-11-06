@@ -1,3 +1,4 @@
+import { pluginCommands, pluginManual } from "./plugin/cli-table.mjs";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -82,7 +83,11 @@ export function renderGuide(name) {
   return rewriteDocLinks(content);
 }
 
-export function renderCommandManual(name) {
+export function renderCommandManual(name, table) {
+  const plugin = pluginCommands(table).find(c => c.name === name);
+  if (!COMMANDS.some(c => c.name === name) && plugin) return pluginManual(plugin);
+  const group = table?.plugins.find(p => p.commands.some(c => c.name[0] === name));
+  if (!COMMANDS.some(c => c.name === name) && group) return group.commands.filter(c => c.name[0] === name).map(c => `${c.name.join(" ")}: ${c.summary}`).join("\n");
   const command = COMMANDS.find(entry => entry.name === name);
   const usage = commandUsage(name);
   if (!command || !usage) return undefined;
@@ -99,12 +104,15 @@ export function renderCommandManual(name) {
   return sections.join("\n\n");
 }
 
-export function renderHelpIndex({ guidesOnly = false } = {}) {
+export function renderHelpIndex({ guidesOnly = false, table } = {}) {
   const guides = listGuides();
   const lines = [];
   if (!guidesOnly) {
     lines.push("Commands:");
     lines.push(...COMMANDS.map(command => `  ${command.name.padEnd(22)}${command.summary.split("\n")[0]}`));
+    for (const plugin of table?.plugins ?? []) {
+      if (plugin.commands.length) lines.push(`Plugin ${plugin.name}:`, ...plugin.commands.map(c => `  ${c.name.join(" ").padEnd(22)}${c.summary}`));
+    }
     lines.push("");
   }
   lines.push("Guides:");

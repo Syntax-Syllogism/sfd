@@ -1,0 +1,48 @@
+{
+  "name": "@syntax-syllogism/sfd-plugin",
+  "version": "0.0.1",
+  "description": "Operation contract, validator and test kit for sfd plugins (API v0, experimental).",
+  "license": "MIT",
+  "type": "module",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.mjs"
+    },
+    "./validate": {
+      "types": "./validate.d.ts",
+      "default": "./validate.mjs"
+    },
+    "./testkit": {
+      "types": "./testkit.d.ts",
+      "default": "./testkit.mjs"
+    }
+  },
+  "files": [
+    "index.d.ts",
+    "index.mjs",
+    "validate.d.ts",
+    "validate.mjs",
+    "cli.schema.json",
+    "testkit.d.ts",
+    "testkit.mjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "peerDependencies": {
+    "zod": "^4",
+    "@salesforce/core": "*"
+  },
+  "peerDependenciesMeta": {
+    "zod": {
+      "optional": true
+    },
+    "@salesforce/core": {
+      "optional": true
+    }
+  }
+}

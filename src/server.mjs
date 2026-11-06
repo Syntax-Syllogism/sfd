@@ -50,15 +50,15 @@ export async function startServer({ socket, version, handlers, idleMs = 60 * 60_
     idleTimer.unref?.();
   };
 
-  async function respond(req) {
+  async function respond(req, transport) {
     if (req.op === "stop") return { status: 0, result: { stopping: true } };
     if (req.v !== version) return { restart: true };
     const handler = handlers[req.op];
     if (!handler) return { status: 1, name: "UnknownOperation", message: `Unknown operation: ${req.op}` };
     try {
-      return { status: 0, result: await handler(req) };
+      return { status: 0, result: await handler(req, transport) };
     } catch (e) {
-      return { status: 1, name: e.name ?? "Error", message: e.message ?? String(e), errorCode: e.errorCode, ...(e.trace ? { trace: e.trace } : {}), ...(req.raw && e.actions ? { actions: e.actions } : {}) };
+      return { status: 1, name: e.name ?? "Error", message: e.message ?? String(e), errorCode: e.errorCode, ...(e.exitCode === 4 ? { exitCode: 4, approvalRequired: e.approvalRequired, effect: e.effect, orgType: e.orgType, summary: e.summary, plan: e.plan } : {}), ...(e.trace ? { trace: e.trace } : {}), ...(req.raw && e.actions ? { actions: e.actions } : {}) };
     }
   }
 
@@ -75,7 +75,14 @@ export async function startServer({ socket, version, handlers, idleMs = 60 * 60_
       clearTimeout(idleTimer);
       let req;
       try { req = JSON.parse(buf.slice(0, nl)); } catch { req = {}; }
-      const res = await respond(req);
+      const controller = new AbortController();
+      let responded = false;
+      conn.once("close", () => { if (!responded) controller.abort(); });
+      const res = await respond(req, {
+        signal: controller.signal,
+        emit: event => { if (!conn.destroyed) conn.write(JSON.stringify(event) + "\n"); }
+      });
+      responded = true;
       conn.end(JSON.stringify(res) + "\n");
       active--;
       if (req.op === "stop") drain("stop");

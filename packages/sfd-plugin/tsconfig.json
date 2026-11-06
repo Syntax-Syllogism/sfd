@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "skipLibCheck": false,
+    "paths": {
+      "zod": [
+        "./test/stubs/zod.d.ts"
+      ],
+      "@salesforce/core": [
+        "./test/stubs/salesforce-core.d.ts"
+      ]
+    }
+  },
+  "files": [
+    "index.d.ts",
+    "test/types.test-d.ts"
+  ]
+}

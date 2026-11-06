@@ -69,3 +69,16 @@ for (const command of ["status", "start", "reload", "stop"]) {
     if (command === "stop") assert.equal(await isRunning(env), false);
   });
 }
+
+
+test("client parses fragmented NDJSON events and the final response", async t => {
+  const env = environment();
+  const server = net.createServer(conn => conn.once("data", () => {
+    conn.write('{"event":"progress","phase":"sta');
+    setTimeout(() => conn.end('rt"}\n{"event":"notice","message":"hi"}\n{"status":0,"result":"done"}\n'), 10);
+  }));
+  await new Promise(r => server.listen(paths(env).socket, r)); t.after(() => server.close());
+  const events = [];
+  assert.equal((await call("stream", {}, {env, autoStart:false, onEvent:event => events.push(event)})).result, "done");
+  assert.deepEqual(events, [{event:"progress",phase:"start"},{event:"notice",message:"hi"}]);
+});

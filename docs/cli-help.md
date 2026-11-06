@@ -39,7 +39,7 @@ inserted under `Commands:`.
   combined row. A new lifecycle command also needs that row updated.
 - The `help` entry is a regular row. Its syntax is `help [-a | -g] [<command|guide>]`.
 - Below the list, the top-level help ends with `Run 'sfd help <command|guide>' for
-  full documentation.` and then the exit codes.
+  full documentation.` and then the exit codes (including 4 for approval required or policy denied).
 - Syntax is padded to 22 columns. Longer syntax moves the description to the
   next line, indented to the description column.
 - `test/snippet.test.mjs` compares the top-level list against a snapshot.
@@ -104,3 +104,6 @@ daemon handshake value, not the printed version.
 - When the command list changes, update the README command table and the
   "Using sfd with coding agents" section.
 - Run `npm test` before committing.
+
+Write command help includes `--confirm <hash>`; the confirmation and policy
+flow is described in [Safety policy](safety.md).

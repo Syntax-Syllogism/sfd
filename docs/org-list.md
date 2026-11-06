@@ -72,7 +72,8 @@ column appears only with `--status`. With no orgs the output is
 `--json` prints `{ "orgs": [...] }`. The handler returns `{ orgs, hiddenExpired }`,
 and the CLI drops `hiddenExpired` from the JSON. Each entry has `alias`,
 `username`, `orgId`, `instanceUrl`, `type`, `isDefault`, `isDefaultDevHub`, and
-optionally `expirationDate`, `expired` and `status`.
+a `safetyType` (locally known scratch type, cached detected type, or unknown),
+and optionally `expirationDate`, `expired` and `status`. See [Safety policy](safety.md).
 
 ## No tokens in output
 

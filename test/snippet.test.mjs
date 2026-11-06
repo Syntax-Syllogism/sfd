@@ -22,7 +22,7 @@ function fixture(t) {
         env: { ...process.env, SFD_RUNTIME_DIR: runtime, SFD_SF_ROOT: join(cwd, "no-sf"), SF_TARGET_ORG: "" }
       });
       assert.ifError(result.error);
-      assert.equal(existsSync(runtime), false, "local command must not start the daemon");
+      for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(runtime, file)), false, "local command must not start the daemon");
       return result;
     }
   };
@@ -169,6 +169,6 @@ test("help preserves existing command text and shares the metadata", t => {
   assert.equal(result.status, 0, result.stderr);
   const commands = result.stdout.split("Commands:\n")[1].split("\n\nCommon options:")[0];
   assert.equal(commands, commandHelp());
-  const withoutSnippet = commands.split("\n").filter(line => !line.startsWith("  agents-snippet ") && !line.includes("Print agent instructions, or update") && !line.startsWith("  discover ") && !line.includes("Report missed sfd opportunities")).join("\n");
+  const withoutSnippet = commands.split("\n").filter(line => !line.startsWith("  op ") && !line.includes("Run a plugin operation or preview its plan") && !line.startsWith("  plugin list ") && !line.includes("List plugin operations, effects, worker state and problems") && !line.startsWith("  agents-snippet ") && !line.includes("Print agent instructions, or update") && !line.startsWith("  discover ") && !line.includes("Report missed sfd opportunities")).join("\n");
   assert.equal(withoutSnippet, originalCommands);
 });

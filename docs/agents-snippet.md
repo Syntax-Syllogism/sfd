@@ -20,8 +20,10 @@ with the `sfd help <command>` pointer, the `-o` rule, the exit codes and the
 `sf … --json` fallback. The `help` entry in `COMMANDS` gets no bullet: its
 `agentTip` is not used. Run `sfd agents-snippet` to see the current text.
 
-The block must stay at 15 lines or fewer (tested). Agents load it into every
-session, so keep each tip short.
+The built-in block must stay at 15 lines or fewer (tested). Plugin commands
+use an additional budget of six per plugin and 20 overall; omitted commands
+collapse to a namespace help pointer. Without plugins, output is unchanged.
+Agents load it into every session, so keep each tip short.
 
 ## Snippet line rules
 
@@ -33,6 +35,10 @@ session, so keep each tip short.
 - `agentGroup` entries that are adjacent in `COMMANDS` share one bullet, joined
   by `; `. The four lifecycle entries form one bullet this way.
 - Without `agentTip`, newlines in `summary` become spaces in the snippet.
+
+Plugin tips use the same separator. A missing tip or one without `": "`
+falls back to the command summary with no usage suffix, so a malformed plugin
+tip cannot prevent the snippet from rendering.
 
 ## Writing into a file
 
