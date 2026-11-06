@@ -56,11 +56,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subpaths now match their runtime exports.
 - Hook and runtime code paths now guard `process.getuid` on Windows.
 
-## [0.5.5] - 2026-11-06
-
-Published by mistake. It contains the same changes as 0.6.0; use 0.6.0
-instead.
-
 ## [0.5.4] - 2026-11-05
 
 ### Added
