@@ -5,11 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
-## [0.6.0] - 2026-11-06
-
-This release has the same code as 0.5.5, which was published with the wrong
-version number. These changes add features and change default behavior, so
-they need a minor version bump.
+## [0.6.1] - 2026-11-06
 
 ### Added
 
