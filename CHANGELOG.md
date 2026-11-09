@@ -7,22 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Plugin operations can report partial failures with `ctx.reportFailures?.(count)`; successful envelopes carry positive counts and the CLI exits 1.
+## [0.7.1] - 2026-11-09
 
 ### Fixed
 
-- Plain plugin plans print warnings before the policy decision.
+- `sfd retrieve` no longer prints a contradictory `FAILED (Succeeded)` header when the server succeeds but some components fail; it prints `PARTIAL: retrieved N files from <org> (<id>); M failed` and still exits 1
 
 ## [0.7.0] - 2026-11-09
 
 ### Added
-- Plugin partial failures are now reported, and plan warnings are printed
+
+- Plugin operations can report partial failures with `ctx.reportFailures?.(count)`; successful envelopes carry positive counts and the CLI exits 1
 - Documentation site for sfd, built with Starlight
 
 ### Changed
+
 - Installing the Claude hook now confirms deny rules before making changes
+
+### Fixed
+
+- Plain plugin plans print warnings before the policy decision
 
 ## [0.6.1] - 2026-11-06
 

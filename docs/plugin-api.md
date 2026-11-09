@@ -237,7 +237,8 @@ const result = await runOperation(operations.operations[0], { options: {}, ctx }
 
 ## Migration and vendoring
 
-The package is not yet published to npm. For v0, vendor `index.d.ts` as
+`@syntax-syllogism/sfd-plugin` is not published to npm yet (sfd itself is, as
+`@syntax-syllogism/sfd`). For v0, vendor `index.d.ts` as
 `src/sfd/contract.d.ts`, adding a header with the source sfd commit. Resolve the
 Zod and Salesforce type imports from your own plugin dependencies. Keep adapters
 in the plugin package; existing core contracts can migrate later. Do not use

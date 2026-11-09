@@ -245,13 +245,23 @@ function componentLines(files, conflict = false) {
   });
 }
 
+function retrieveFailureHead(summary, org, id) {
+  const failed = summary.files.filter(f => f.problem || String(f.state).toLowerCase() === "failed").length;
+  const retrieved = summary.files.length - failed;
+  // The server can report Succeeded while individual components fail; say so instead of "FAILED (Succeeded)".
+  if (failed && retrieved) return `PARTIAL: retrieved ${retrieved} files from ${org}${id}; ${failed} failed`;
+  const status = summary.status && summary.status !== "Succeeded" ? ` (${summary.status})` : "";
+  return `FAILED${status} ${org}${id}`;
+}
+
 export function formatRetrieve(summary, org) {
   const count = new Set(summary.conflicts.map(c => `${c.type}:${c.fullName}`)).size;
+  const id = summary.id ? ` (${summary.id})` : "";
   const head = count
     ? `CONFLICTS: ${count} component${count === 1 ? "" : "s"} changed both locally and in ${org}; rerun with --ignore-conflicts to overwrite`
     : summary.message ?? (summary.success
-      ? `Retrieved ${summary.files.length} files from ${org}${summary.id ? ` (${summary.id})` : ""}`
-      : `FAILED (${summary.status}) ${org}${summary.id ? ` (${summary.id})` : ""}`);
+      ? `Retrieved ${summary.files.length} files from ${org}${id}`
+      : retrieveFailureHead(summary, org, id));
   const lines = [head, ...componentLines(summary.files), ...componentLines(summary.conflicts, true)];
   for (const warning of summary.warnings) lines.push(`  ! ${typeof warning === "string" ? warning : warning.problem ?? JSON.stringify(warning)}`);
   if (summary.errorMessage) lines.push(`  ✖ ${summary.errorMessage}`);

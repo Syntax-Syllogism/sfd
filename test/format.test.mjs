@@ -114,9 +114,21 @@ test("retrieve summaries preserve relative files, failures and warnings; renderi
     getFileResponses: () => [{ state: "Failed", type: "ApexClass", fullName: "Bad", problem: "not found" }]
   }, "/project");
   assert.equal(failed.success, false);
-  assert.match(formatRetrieve(failed, "dev"), /FAILED.*\n  ✖ ApexClass Bad: not found\n  ✖ bad retrieve/);
+  assert.match(formatRetrieve(failed, "dev"), /^FAILED \(Failed\) dev\n  ✖ ApexClass Bad: not found\n  ✖ bad retrieve/);
   const partial = summarizeRetrieve({ response: { success: true }, getFileResponses: () => [{ state: "Failed", problem: "bad" }] }, "/project");
   assert.equal(partial.success, false);
+  assert.match(formatRetrieve(partial, "dev"), /^FAILED dev\n/);
+  // Server status Succeeded with some component failures: never "FAILED (Succeeded)".
+  const mixed = summarizeRetrieve({ response: { success: true, status: "Succeeded", id: "09S" }, getFileResponses: () => [
+    { state: "Created", type: "ReportType", fullName: "Rt", filePath: "/project/reportTypes/Rt.reportType-meta.xml" },
+    { state: "Failed", type: "DigitalExperienceBundle", fullName: "site/Space", problem: "cannot be found" }
+  ] }, "/project");
+  assert.equal(mixed.success, false);
+  const mixedText = formatRetrieve(mixed, "dev");
+  assert.match(mixedText, /^PARTIAL: retrieved 1 files from dev \(09S\); 1 failed\n/);
+  assert.doesNotMatch(mixedText, /Succeeded/);
+  const allFailedOk = formatRetrieve({ ...failed, status: "Succeeded" }, "dev");
+  assert.match(allFailedOk, /^FAILED dev\n/);
 });
 
 test("retrieve conflict refusal and empty results are compact", () => {

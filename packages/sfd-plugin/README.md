@@ -17,8 +17,9 @@ The root entry re-exports all helpers. `index.d.ts` declares the types.
 See the sfd [plugin API guide](https://github.com/Syntax-Syllogism/sfd/blob/release/docs/plugin-api.md)
 for the manifest, operation, context, effects, CLI schema and migration rules.
 
-This package is not yet published to npm. Until publication is approved, vendor
-`index.d.ts` as `src/sfd/contract.d.ts` in your plugin. Add a header recording the
-sfd commit it came from and resolve the type-only peers from your plugin.
+sfd itself is on npm as `@syntax-syllogism/sfd`, but this helper package is
+not published yet. Vendor `index.d.ts` as `src/sfd/contract.d.ts` in your
+plugin. Add a header recording the sfd commit it came from and resolve the
+type-only peers from your plugin.
 
 MIT licensed; see LICENSE.
