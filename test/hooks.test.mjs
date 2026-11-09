@@ -1,11 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, cpSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { handle, editSettings, hookShell } from "../src/hooks.mjs";
+import { handle, editSettings, hookShell, CONFIRM_DENY_RULES } from "../src/hooks.mjs";
+import { refreshTableMetadata } from "../src/plugin/table-cache.mjs";
 
 const cli = fileURLToPath(new URL("../bin/sfd.mjs", import.meta.url));
 const configs = {
@@ -21,7 +22,7 @@ function temporary(t) {
 function run(args, input, dir, env = {}) {
   return spawnSync(process.execPath, [cli, "hook", ...args], {
     input, encoding: "utf8", cwd: dir, timeout: 5000,
-    env: { ...process.env, HOME: dir, SFD_RUNTIME_DIR: join(dir, "runtime"), SFD_HOOK_DISABLE: "", SFD_HOOK_SHELL: "posix", ...env }
+    env: { ...process.env, HOME: dir, USERPROFILE: dir, SFD_RUNTIME_DIR: join(dir, "runtime"), SFD_HOOK_DISABLE: "", SFD_HOOK_SHELL: "posix", ...env }
   });
 }
 test("REST hooks preserve implicit-body calls and ask for explicit production writes", t => {
@@ -151,6 +152,117 @@ for (const [agent, config] of Object.entries(configs)) {
     for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(dir, "runtime", file)), false);
   });
 }
+test("claude install adds confirm deny rules once and uninstall removes only them", t => {
+  const dir = temporary(t), home = join(dir, "home");
+  const file = join(home, ".claude", "settings.json");
+  const hook = { matcher: "Bash", hooks: [{ type: "command", command: "sfd hook claude" }] };
+  const fresh = editSettings("install", "claude", { home });
+  assert.equal(fresh.changed, true);
+  assert.deepEqual(fresh.denyAdded, CONFIRM_DENY_RULES);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { hooks: { PreToolUse: [hook] }, permissions: { deny: [...CONFIRM_DENY_RULES] } });
+  const again = editSettings("install", "claude", { home });
+  assert.deepEqual([again.changed, again.denyAdded], [false, []]);
+  const removed = editSettings("uninstall", "claude", { home });
+  assert.equal(removed.changed, true);
+  assert.deepEqual(removed.denyRemoved, CONFIRM_DENY_RULES);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { hooks: { PreToolUse: [] } });
+
+  // User rules keep their order; sfd rules already present are not duplicated.
+  const user = { theme: "dark", permissions: { allow: ["Bash(git status)"], deny: ["Bash(rm *)", CONFIRM_DENY_RULES[1], "Read(.env)"], defaultMode: "default" } };
+  writeFileSync(file, JSON.stringify(user));
+  const merged = editSettings("install", "claude", { home });
+  assert.deepEqual(merged.denyAdded, [CONFIRM_DENY_RULES[0], CONFIRM_DENY_RULES[2]]);
+  const installed = JSON.parse(readFileSync(file, "utf8"));
+  assert.deepEqual(installed.permissions, { ...user.permissions, deny: [...user.permissions.deny, CONFIRM_DENY_RULES[0], CONFIRM_DENY_RULES[2]] });
+  assert.equal(editSettings("install", "claude", { home }).changed, false);
+  editSettings("uninstall", "claude", { home });
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), { ...user, permissions: { ...user.permissions, deny: ["Bash(rm *)", "Read(.env)"] }, hooks: { PreToolUse: [] } });
+
+  // Upgrade: an older sfd installed the hook without rules.
+  writeFileSync(file, JSON.stringify({ hooks: { PreToolUse: [hook] } }));
+  const upgraded = editSettings("install", "claude", { home });
+  assert.deepEqual([upgraded.changed, upgraded.denyAdded], [true, CONFIRM_DENY_RULES]);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).hooks.PreToolUse, [hook]);
+  // Uninstall reconciles rules even when the hook is already gone.
+  writeFileSync(file, JSON.stringify({ permissions: { deny: [...CONFIRM_DENY_RULES] } }));
+  assert.deepEqual(editSettings("uninstall", "claude", { home }).denyRemoved, CONFIRM_DENY_RULES);
+  assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), {});
+});
+test("claude install with denyConfirm false adds only the hook", t => {
+  const dir = temporary(t), file = join(dir, ".claude", "settings.json");
+  const result = editSettings("install", "claude", { home: dir, denyConfirm: false });
+  assert.deepEqual([result.changed, result.denyAdded], [true, []]);
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).permissions, undefined);
+  assert.equal(editSettings("install", "claude", { home: dir, denyConfirm: false }).changed, false);
+});
+test("codex and gemini settings never gain or lose permissions", t => {
+  for (const agent of ["codex", "gemini"]) {
+    const dir = temporary(t), file = join(dir, configs[agent].directory, configs[agent].file);
+    const result = editSettings("install", agent, { home: dir });
+    assert.deepEqual([result.denyAdded, result.denyRemoved], [[], []]);
+    assert.equal(JSON.parse(readFileSync(file, "utf8")).permissions, undefined);
+    // Foreign permission-shaped settings are neither validated nor edited.
+    for (const permissions of [{ deny: [...CONFIRM_DENY_RULES] }, "string", { deny: "x" }]) {
+      writeFileSync(file, JSON.stringify({ permissions }));
+      editSettings("install", agent, { home: dir });
+      editSettings("uninstall", agent, { home: dir });
+      assert.deepEqual(JSON.parse(readFileSync(file, "utf8")).permissions, permissions);
+    }
+  }
+});
+test("claude rejects invalid permissions without changing the file", t => {
+  const dir = temporary(t), file = join(dir, ".claude", "settings.json");
+  mkdirSync(join(dir, ".claude"));
+  for (const invalid of ['{"permissions":[]}', '{"permissions":"x"}', '{"permissions":null}', '{"permissions":{"deny":"x"}}', '{"permissions":{"deny":{}}}']) {
+    writeFileSync(file, invalid);
+    for (const action of ["install", "uninstall"]) {
+      assert.throws(() => editSettings(action, "claude", { home: dir }), /permissions/);
+      assert.equal(readFileSync(file, "utf8"), invalid);
+    }
+  }
+});
+test("install CLI prints added and removed deny rules and accepts --no-deny-confirm", t => {
+  const dir = temporary(t);
+  const installed = run(["install", "--agent", "claude", "--project"], "", dir);
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.ok(installed.stdout.includes(`Added permissions.deny: ${CONFIRM_DENY_RULES.join(", ")}\n`), installed.stdout);
+  const again = run(["install", "--agent", "claude", "--project"], "", dir);
+  assert.match(again.stdout, /^Unchanged /);
+  assert.doesNotMatch(again.stdout, /permissions\.deny/);
+  const removed = run(["uninstall", "--agent", "claude", "--project"], "", dir);
+  assert.ok(removed.stdout.includes(`Removed permissions.deny: ${CONFIRM_DENY_RULES.join(", ")}\n`), removed.stdout);
+  const skipped = run(["install", "--agent", "claude", "--no-deny-confirm"], "", dir);
+  assert.equal(skipped.status, 0, skipped.stderr);
+  assert.doesNotMatch(skipped.stdout, /permissions\.deny/);
+  assert.equal(JSON.parse(readFileSync(join(dir, ".claude", "settings.json"), "utf8")).permissions, undefined);
+  for (const agent of ["codex", "gemini"]) {
+    const result = run(["install", "--agent", agent, "--no-deny-confirm"], "", dir);
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.stdout, /permissions\.deny/);
+  }
+  assert.match(run(["--help"], "", dir).stdout, /--no-deny-confirm/);
+});
+test("plugin commands without descriptor effects ask on production; refreshed read effects keep the read decision", t => {
+  const dir = temporary(t), plugin = join(dir, "echo");
+  cpSync(resolve("test/fixtures/plugins/echo"), plugin, { recursive: true });
+  // Static cli.json effects must not lower the hook decision before descriptors are known.
+  const cli = JSON.parse(readFileSync(join(plugin, "cli.json"), "utf8"));
+  cli.commands[0].effects = ["read"];
+  writeFileSync(join(plugin, "cli.json"), JSON.stringify(cli));
+  const env = { SFD_RUNTIME_DIR: join(dir, "runtime"), SFD_POLICY: join(dir, "policy.json"), SFD_PLUGIN_PATHS: plugin, SFD_PLUGIN_PATHS_ONLY: "1", SFD_HOOK_SHELL: "posix" };
+  mkdirSync(env.SFD_RUNTIME_DIR);
+  writeFileSync(join(env.SFD_RUNTIME_DIR, "org-types.json"), JSON.stringify({ prod: "production" }));
+  const check = agent => JSON.parse(handle(agent, JSON.stringify({ tool_name: "Bash", tool_input: { command: "sf echo say --text hi -o prod" } }), env, "linux")).hookSpecificOutput;
+  for (const agent of ["claude", "codex"]) {
+    const output = check(agent);
+    assert.equal(output.permissionDecision, "ask");
+    assert.match(output.permissionDecisionReason, /org-write on production org \(prod\)/);
+    assert.equal(output.updatedInput.command, "sfd echo say --text 'hi' -o 'prod'");
+  }
+  refreshTableMetadata([{ root: plugin, operations: [{ id: "echo.say", cliId: "echo:say", summary: "Echo text", effects: ["read"], optionKeys: ["text"] }], problems: [] }], env);
+  assert.equal(check("claude").permissionDecision, undefined);
+  assert.equal(check("codex").permissionDecision, "allow");
+});
 test("unknown agents have no opinion", () => assert.equal(handle("unknown", "{}"), ""));
 test("shell selection covers agents, platforms and explicit overrides", () => {
   for (const agent of Object.keys(configs)) for (const platform of ["linux", "darwin", "win32"]) {

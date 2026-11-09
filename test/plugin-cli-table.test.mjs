@@ -33,7 +33,9 @@ test("validates structural and descriptor constraints without throwing on malfor
     [t => t.commands[0].sf = "echo say", /cliId/],
     [t => t.commands[0].formatter = { module: "./../escape.mjs" }, /formatter/],
     [t => t.commands[0].flags = [null], /flag must/],
-    [t => t.commands[0].flags[0].char = "h", /reserved/]
+    [t => t.commands[0].flags[0].char = "h", /reserved/],
+    [t => t.commands[0].flags.push({ name: "confirm", type: "string" }), /confirm is reserved/],
+    [t => t.commands[0].flags.push({ name: "confirm", type: "boolean", required: true }), /confirm is reserved/]
   ];
   for (const [mutate, expected] of cases) {
     const copy = structuredClone(table); mutate(copy);
@@ -77,17 +79,30 @@ test("plugin rewrites preserve strict shell and flag rules", () => {
 
 test("plugin rewrites require every required flag and accept aliases in both shells", () => {
   const commands = structuredClone(table.commands);
-  commands[0].flags.push({ name: "confirm", type: "boolean", required: true });
+  commands[0].flags.push({ name: "force", type: "boolean", required: true });
   commands[0].flags.push({ name: "target-org", type: "string", required: true });
   const requiredTable = { plugins: [{ ...merged.plugins[0], commands }] };
   for (const shell of ["posix", "powershell"]) {
     assert.match(rewrite("sf echo say", { shell, table: merged }).skip, /required --text/);
-    for (const flags of ["--text hi", "--confirm -o dev", "--text hi --confirm"]) {
+    for (const flags of ["--text hi", "--force -o dev", "--text hi --force"]) {
       assert.match(rewrite(`sf echo say ${flags}`, { shell, table: requiredTable }).skip, /required/);
     }
-    for (const flags of ["--text hi --confirm --target-org dev", "-t hi --confirm -o dev", "--text=hi --confirm -o=dev"]) {
+    for (const flags of ["--text hi --force --target-org dev", "-t hi --force -o dev", "--text=hi --force -o=dev"]) {
       assert.equal(rewrite(`sf echo say ${flags}`, { shell, table: requiredTable }).command,
-        "sfd echo say --text 'hi' --confirm -o 'dev'");
+        "sfd echo say --text 'hi' --force -o 'dev'");
+    }
+  }
+});
+
+test("plugin rewrites never forward --confirm, even from an unvalidated table that declares it", () => {
+  const commands = structuredClone(table.commands);
+  commands[0].flags.push({ name: "confirm", type: "string" });
+  const declared = { plugins: [{ ...merged.plugins[0], commands }] };
+  for (const shell of ["posix", "powershell"]) {
+    for (const flags of ["--confirm abc123def456", "--confirm=abc123def456"]) {
+      for (const source of [merged, declared]) {
+        assert.match(rewrite(`sf echo say --text hi ${flags}`, { shell, table: source }).skip, /unsupported flag --confirm/);
+      }
     }
   }
 });

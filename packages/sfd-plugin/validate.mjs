@@ -109,13 +109,14 @@ export function validateCliTable(table, operations) {
       if (flag.char !== undefined) chars.add(flag.char);
       if (!["string", "boolean", "integer", "file", "directory"].includes(flag.type)) report("invalid flag type");
       for (const key of ["required", "multiple"]) if (flag[key] !== undefined && typeof flag[key] !== "boolean") report(`${key} must be boolean`);
-      if (["target-org", "api-version", "confirm"].includes(flag.name) && flag.option !== undefined) report("reserved flag must omit option");
+      if (flag.name === "confirm") report("confirm is reserved by host and cannot be declared");
+      if (["target-org", "api-version"].includes(flag.name) && flag.option !== undefined) report("reserved flag must omit option");
       if (flag.option !== undefined && (!nonempty(flag.option) || (shape && !Object.hasOwn(shape, flag.option)))) report(`unknown option key ${flag.option}`);
       const host = { "target-org": "o", help: "h" };
       if (Object.hasOwn(host, flag.name) && flag.char !== undefined && flag.char !== host[flag.name]) report("host flag has conflicting char");
       if (["o", "h"].includes(flag.char) && host[flag.name] !== flag.char) report("flag char is reserved by host");
       if (["json", "plan", "help", "quiet"].includes(flag.name) && (flag.type !== "boolean" || flag.option !== undefined || flag.multiple)) report("host boolean flag cannot map an option or repeat");
-      if (["target-org", "api-version", "confirm"].includes(flag.name) && (flag.type !== "string" || flag.multiple)) report("host value flag must be a single string");
+      if (["target-org", "api-version"].includes(flag.name) && (flag.type !== "string" || flag.multiple)) report("host value flag must be a single string");
     }
   }
   return problems;

@@ -60,3 +60,15 @@ test("operation failures and rejected confirmation propagate", async () => {
   await assert.rejects(runOperation(op, { options: {} }), error => error === failure);
   await assert.rejects(runOperation(writeOperation(), { options: {}, confirmPlan: async () => { throw failure; } }), error => error === failure);
 });
+
+
+test("failure reports are captured in test contexts and operation results", async () => {
+  const ctx = stubContext();
+  ctx.reportFailures(2);
+  assert.equal(ctx._failures, 2);
+  const op = writeOperation();
+  op.plan = async (conn, options, context) => { context.reportFailures(3); return {}; };
+  op.apply = async (conn, plan, context) => { context.reportFailures(0); return "done"; };
+  assert.deepEqual(await runOperation(op, { options: {}, ctx, confirmPlan: () => false }), { plan: {}, failures: 3 });
+  assert.deepEqual(await runOperation(op, { options: {}, ctx }), { plan: {}, data: "done", failures: 0 });
+});

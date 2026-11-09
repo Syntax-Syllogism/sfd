@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0/).
 
+## [Unreleased]
+
+### Added
+
+- Plugin operations can report partial failures with `ctx.reportFailures?.(count)`; successful envelopes carry positive counts and the CLI exits 1.
+
+### Fixed
+
+- Plain plugin plans print warnings before the policy decision.
+
+## [0.7.0] - 2026-11-09
+
+### Added
+- Plugin partial failures are now reported, and plan warnings are printed
+- Documentation site for sfd, built with Starlight
+
+### Changed
+- Installing the Claude hook now confirms deny rules before making changes
+
 ## [0.6.1] - 2026-11-06
 
 ### Added

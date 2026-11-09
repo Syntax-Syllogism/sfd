@@ -196,3 +196,29 @@ test("production plugin writes gate the exact worker plan and preview supplies c
   assert.equal((await call("say")).data.applied, 1);
   await assert.rejects(call("write", { n: 4 }, { confirm: approval.hash }), { name: "ApprovalRequired" });
 });
+
+
+test("failure reports carry through read, plan and apply", async t => {
+  const { call } = fixture(t);
+  assert.equal((await call("failures", { count: 2 })).failures, 2);
+  assert.equal((await call("partial", { planCount: 2 }, { mode: "plan" })).failures, 2);
+  assert.equal((await call("partial", { planCount: 2, applyCount: 3 })).failures, 3);
+  assert.equal((await call("partial", { planCount: 2 })).failures, 2);
+  for (const options of [{}, { planCount: 2, applyCount: 0 }]) {
+    assert.equal("failures" in await call("partial", options), false);
+  }
+  for (const count of [-1, 1.5]) {
+    assert.equal((await call("failures", { count })).code, "invalid-failures");
+    assert.equal((await call("partial", { planCount: count })).code, "invalid-failures");
+    assert.equal((await call("partial", { applyCount: count })).code, "invalid-failures");
+  }
+});
+
+test("safe auth retries discard failure reports from the failed attempt", async t => {
+  const { call } = fixture(t);
+  for (const errorCode of ["INVALID_SESSION_ID", "INVALID_AUTH_HEADER"]) {
+    const result = await call("retry", { key: errorCode, count: 2, errorCode }, { targetOrg: "user" });
+    assert.equal(result.ok, true);
+    assert.equal("failures" in result, false);
+  }
+});

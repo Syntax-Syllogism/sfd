@@ -42,6 +42,8 @@ export interface OperationContext {
   onProgress(event: ProgressEvent): void;
   /** Short human notice printed to stderr by the CLI (sfd's existing notice channel). */
   notice(message: string): void;
+  /** Report completed item failures; the last non-negative integer wins. A positive count exits 1 while retaining data and warnings. Older hosts require ctx.reportFailures?.(count). */
+  reportFailures?(count: number): void;
   /** Present when requiresProject is true, or when cwd is inside an sfdx project. */
   projectRoot?: string;
   /** Resolve a user-supplied path against the client's cwd, never process.cwd(). */
@@ -76,7 +78,7 @@ export interface OperationModule { apiVersion: ApiVersion; operations: Operation
 /** Errors: throw anything with these fields; the host maps them into Err. */
 export interface OperationErrorShape { code: string; message: string; actions?: string[]; retryable?: "safe" | "unsafe" | "no" }
 
-export type Ok<R> = { ok: true; data: R; total?: number; truncated?: boolean; warnings: string[] };
+export type Ok<R> = { ok: true; data: R; total?: number; truncated?: boolean; failures?: number; warnings: string[] };
 export type Err = { ok: false; code: string; message: string; actions: string[]; retryable: "safe" | "unsafe" | "no" };
 export type Envelope<R> = Ok<R> | Err;
 
@@ -129,6 +131,7 @@ export function effectsExceeding(ceiling: readonly Effect[], planEffects?: reado
 export interface StubContext extends OperationContext {
   _progress: ProgressEvent[];
   _notices: string[];
+  _failures?: number;
 }
 export function stubContext(overrides?: Partial<OperationContext> & { cwd?: string }): StubContext;
 export function stubOrg(overrides?: Partial<OrgInfo>): OrgInfo;
@@ -137,9 +140,9 @@ export interface RunOperationOptions<O> {
   options: unknown;
   ctx?: OperationContext;
 }
-export function runOperation<O, R>(op: ReadOperation<O, R>, args: RunOperationOptions<O>): Promise<{ data: R }>;
+export function runOperation<O, R>(op: ReadOperation<O, R>, args: RunOperationOptions<O>): Promise<{ data: R; failures?: number }>;
 export function runOperation<O, P extends object, R>(
   op: WriteOperation<O, P, R>,
   args: RunOperationOptions<O> & { confirmPlan?: (plan: P & WritePlan) => boolean | void | Promise<boolean | void> }
-): Promise<{ plan: P & WritePlan; data?: R }>;
+): Promise<{ plan: P & WritePlan; data?: R; failures?: number }>;
 export function assertConformance(mod: unknown): void;

@@ -1,4 +1,7 @@
-# Agent hooks
+---
+title: Agent hooks
+description: "sfd hook lets coding agents run sf commands through the warm daemon."
+---
 
 `sfd hook` lets coding agents run `sf` commands through the warm daemon. Before
 an agent runs a shell command, the hook rewrites a supported `sf` invocation to
@@ -31,6 +34,16 @@ sfd hook uninstall --agent claude [--project]
 Settings are merged, not replaced. Existing settings and other hooks, including
 RTK, are preserved. The first change to an existing file saves a `<file>.bak`;
 later changes keep that backup. Malformed settings are never overwritten.
+
+For Claude Code, install also appends three `permissions.deny` rules so an
+agent cannot run `sfd … --confirm <hash>` and approve its own plan:
+`Bash(sfd * --confirm *)`, `Bash(sfd --confirm *)` and
+`Bash(sfd *--confirm=*)`. It prints the rules it added, adds only missing ones
+and keeps your other permission entries. Pass `--no-deny-confirm` to skip them;
+Codex and Gemini accept the flag and ignore it, and their permission settings
+are never written. Uninstall removes the hook and exactly those rules. See
+[Agent permissions and hooks](safety.md#agent-permissions-and-hooks) for what
+the rules do and do not match.
 
 | Agent | Settings file (user / `--project`) | Event | Tool matched | Response |
 | --- | --- | --- | --- | --- |
@@ -201,7 +214,7 @@ The rewriter skips these, and the agent runs the original command:
    `test/hooks.test.mjs` if the response shape changes. If the `--sf-json`
    output of a command changes, update `src/sf-json.mjs` and its cases in
    `test/sf-json.test.mjs`, using the captures in `test/fixtures/sf-json/`.
-4. Update the table above and the command table in the [README](../README.md).
+4. Update the table above and the command table in the [README](https://github.com/Syntax-Syllogism/sfd).
 
 `sfd discover` also calls `rewrite()` and `lex()` to classify commands from
 local transcripts. A rule change therefore moves its rewritable and skipped

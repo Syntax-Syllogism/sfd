@@ -1,4 +1,7 @@
-# Safety policy
+---
+title: Safety policy
+description: "sfd gates built-in commands and plugin operations by declared effects and target org type."
+---
 
 sfd gates built-in commands and plugin operations by declared effects and target org type.
 
@@ -101,22 +104,51 @@ command's policy decision is ask or deny. They read only local policy and cached
 org types; they never start the daemon or contact Salesforce. An uncached or
 unresolved default target uses unknown. A leading `SF_TARGET_ORG` assignment or
 explicit `-o` selects the cached org. Each rewritten call in a shell list is
-checked. Plugin `cli.json` rewrites use the effects declared in the cached
-plugin table; a command without declared effects counts as `org-write`. Gemini keeps its existing response shape because it has no equivalent
+checked. Plugin `cli.json` rewrites use the effects that `sfd plugin list`
+caches from the plugin's operation descriptors. A command without cached
+effects counts as `org-write`; effects written into `cli.json` itself are
+ignored. Gemini keeps its existing response shape because it has no equivalent
 permission decision field. The daemon still enforces confirmation after the
 harness prompt.
 
-Configure agent permissions to deny agent-issued confirmation commands so an
-agent cannot approve its own plan. For Claude Code, a wildcard rule can be placed
-in `permissions.deny` in settings:
+An agent must not approve its own plan. `sfd hook install --agent claude`
+therefore adds three deny rules to `permissions.deny` in the same settings file
+as the hook:
 
 ```json
-{ "permissions": { "deny": ["Bash(sfd * --confirm *)"] } }
+{
+  "permissions": {
+    "deny": [
+      "Bash(sfd * --confirm *)",
+      "Bash(sfd --confirm *)",
+      "Bash(sfd *--confirm=*)"
+    ]
+  }
+}
 ```
 
-Also cover the argument order `Bash(sfd --confirm *)`, executable paths and any
-wrappers allowed in your environment. Have a human run approved confirmations
-outside the agent. See the [Claude Code permissions reference](https://code.claude.com/docs/en/permissions)
-for rule matching details. Hook installation does not add these permission rules;
-that remains a follow-up. Raw sf commands outside supported rewrites retain
-the agent harness's existing permission behavior.
+A `*` matches any text, including spaces, but the text before it must match
+literally, so each rule covers one spelling: `--confirm` after a subcommand,
+`--confirm` as the first argument, and the `--confirm=<hash>` form. Install
+appends only the missing rules and keeps your other permission entries and
+their order, so re-running it after an older sfd adds the rules. Pass
+`--no-deny-confirm` to install only the hook. Uninstall removes exactly these
+three rules and the hook. It removes `permissions.deny` only when no other rules
+remain in it, and removes `permissions` only when it is then empty.
+
+Per the [Claude Code permissions reference](https://code.claude.com/docs/en/permissions),
+deny rules apply when any subcommand of a compound command matches (`&&`,
+`;`, pipes, subshells and command substitution). They also match past a
+leading assignment such as `SF_TARGET_ORG=prod sfd …`, and past the wrappers
+`timeout`, `time`, `nice`, `nohup`, `stdbuf`, `command` and `builtin`. They do
+not match `sh -c "…"`, an absolute path such as `/usr/local/bin/sfd`, `npx`,
+or other indirection. Add rules for executable paths and any wrappers allowed
+in your environment. Deny rules are not a security boundary. The daemon's
+confirmation check is the enforcement point, and a human should run approved
+confirmations outside the agent.
+
+Codex and Gemini have no equivalent rule that sfd can install. Codex exec-policy
+rules match prefixes only, and Gemini has no `permissions.deny`. Configure
+those agents yourself to keep `--confirm` out of agent-issued commands. Raw sf
+commands outside supported rewrites retain the agent harness's existing
+permission behavior.

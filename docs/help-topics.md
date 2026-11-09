@@ -1,4 +1,7 @@
-# Help topics
+---
+title: Help topics
+description: "sfd help shows command manuals and concept guides."
+---
 
 `sfd help` shows command manuals and concept guides. Like `--help`, it never
 contacts or starts the daemon.

@@ -8,9 +8,10 @@ export function errorEnvelope(error, retry = "unsafe") {
 }
 /** @param {string} code @param {string} message */
 export function failure(code, message) { return errorEnvelope({ code, message }); }
-/** @param {any} data @param {string[]} warnings */
-export function success(data, warnings = []) {
+/** @param {any} data @param {string[]} warnings @param {number} failures */
+export function success(data, warnings = [], failures = 0) {
   return { ok: true, data, warnings,
+    ...(failures > 0 ? { failures } : {}),
     ...(typeof data?.total === "number" ? { total: data.total } : {}),
     ...(typeof data?.truncated === "boolean" ? { truncated: data.truncated } : {}) };
 }

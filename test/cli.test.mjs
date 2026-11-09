@@ -2,7 +2,7 @@ import { socketPath } from '../src/paths.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, existsSync, cpSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, existsSync, cpSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -483,7 +483,10 @@ test("direct plugin commands keep exit 4, the confirm hint and single-use --conf
   assert.ok(hash, blocked.stderr);
   const json = sfd([...args, "--json"]);
   assert.equal(json.status, 4);
-  assert.equal(JSON.parse(json.stdout).approvalRequired.hash, hash);
+  const shape = JSON.parse(json.stdout);
+  assert.deepEqual(Object.keys(shape).sort(), ["approvalRequired", "status"]);
+  assert.equal(shape.status, 4);
+  assert.equal(shape.approvalRequired.hash, hash);
   const preview = sfd([...args, "--plan"]);
   assert.equal(preview.status, 0, preview.stderr);
   assert.match(preview.stderr, /policy: ask/);
@@ -500,4 +503,40 @@ test("plugin CLI --plan issues a hash and --confirm applies through the host gat
   assert.equal(policy.decision, "ask");
   assert.equal(sfd([...args, "--confirm", policy.hash]).status, 0);
   assert.equal(sfd([...args, "--confirm", policy.hash]).status, 4);
+});
+
+
+test("plugin partial failures retain output and approval precedence on both command paths", t => {
+  const root = mkdtempSync(join(tmpdir(), "sfd-echo-partial-"));
+  cpSync(env.SFD_PLUGIN_PATHS, root, { recursive: true });
+  const table = JSON.parse(readFileSync(join(root, "cli.json"), "utf8"));
+  table.commands.push({ operation: "echo.partial", name: ["echo", "partial"], summary: "Partial write", flags: [
+    { name: "plan-count", type: "integer", option: "planCount" },
+    { name: "apply-count", type: "integer", option: "applyCount" },
+  ] });
+  writeFileSync(join(root, "cli.json"), JSON.stringify(table));
+  const local = { ...env, SFD_RUNTIME_DIR: mkdtempSync(join(tmpdir(), "sfd-cli-partial-")), SFD_PLUGIN_PATHS: root };
+  const sfd = (args, input) => spawnSync(process.execPath, [bin, ...args], { env: local, input, encoding: "utf8" });
+  t.after(() => { sfd(["stop"]); rmSync(root, { recursive: true, force: true }); rmSync(local.SFD_RUNTIME_DIR, { recursive: true, force: true }); });
+  for (const args of [
+    ["op", "echo.partial", "--options-json", '{"planCount":2,"applyCount":2}'],
+    ["echo", "partial", "--plan-count", "2", "--apply-count", "2"],
+  ]) {
+    const preview = sfd([...args, "--plan"]);
+    assert.equal(preview.status, 1, preview.stderr);
+    assert.ok(preview.stdout, JSON.stringify(preview));
+    assert.equal(JSON.parse(preview.stdout).summary, "partial write");
+    assert.match(preview.stderr, /warning: plan notice[\s\S]*failed: 2 item\(s\)[\s\S]*policy: allow/);
+    const applied = sfd(args);
+    assert.equal(applied.status, 1, applied.stderr);
+    assert.equal(JSON.parse(applied.stdout).applied, true);
+    assert.match(applied.stderr, /warning: plan notice[\s\S]*failed: 2 item\(s\)/);
+    for (const flags of [["--json"], ["--plan", "--json"]]) {
+      const result = sfd([...args, ...flags]);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(JSON.parse(result.stdout).failures, 2);
+      assert.equal(result.stderr, "");
+    }
+    assert.equal(sfd([...args, "-o", "policy-prod"]).status, 4);
+  }
 });

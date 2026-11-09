@@ -34,7 +34,8 @@ export function loadTable({ env = process.env } = {}) {
     try {
       const table = read(containedPath(plugin.root, entry.cli));
       entry.problems.push(...validateCliTable(table));
-      if (!entry.problems.some(p => !p.startsWith("warning: "))) entry.commands = table.commands;
+      // Effects come only from worker descriptors (refreshTableMetadata), never from static cli.json.
+      if (!entry.problems.some(p => !p.startsWith("warning: "))) entry.commands = table.commands.map(({ effects, ...command }) => command);
     } catch (error) { entry.problems.push(`Invalid cli.json: ${/** @type {Error} */ (error).message}`); }
     return entry;
   });

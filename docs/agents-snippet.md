@@ -1,4 +1,7 @@
-# Agent snippet
+---
+title: Agent snippet
+description: "sfd agents-snippet prints a short Markdown block that tells coding agents to prefer sfd over sf."
+---
 
 `sfd agents-snippet` prints a short Markdown block that tells coding agents to
 prefer `sfd` over `sf`. With `--write`, it keeps that block in a project's

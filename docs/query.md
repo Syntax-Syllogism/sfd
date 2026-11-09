@@ -1,4 +1,7 @@
-# Query output
+---
+title: Query output
+description: "sfd query: the row limit, the CSV layout, the output mode for each flag combination, the sf-compatible --sf-json envelope, and the truncation trailer."
+---
 
 `sfd query`: the row limit, the CSV layout, the output mode for each flag
 combination, the sf-compatible `--sf-json` envelope, and the truncation trailer.

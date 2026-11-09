@@ -10,6 +10,19 @@ import { snippet, upsertSnippet } from "../src/snippet.mjs";
 const cli = resolve("bin/sfd.mjs");
 const block = snippet();
 
+// Keep plugins installed in the developer's real sf data dir out of snippet output.
+function isolatedEnv(cwd) {
+  return {
+    ...process.env,
+    SFD_RUNTIME_DIR: join(cwd, "runtime"),
+    SFD_SF_ROOT: join(cwd, "no-sf"),
+    SF_DATA_DIR: join(cwd, "no-sf-data"),
+    SFD_PLUGIN_PATHS: "",
+    SFD_PLUGIN_PATHS_ONLY: "",
+    SF_TARGET_ORG: ""
+  };
+}
+
 function fixture(t) {
   const cwd = mkdtempSync(join(tmpdir(), "sfd-snippet-"));
   t.after(() => rmSync(cwd, { recursive: true, force: true }));
@@ -19,7 +32,7 @@ function fixture(t) {
     run: (...args) => {
       const result = spawnSync(process.execPath, [cli, ...args], {
         cwd, encoding: "utf8", timeout: 10000,
-        env: { ...process.env, SFD_RUNTIME_DIR: runtime, SFD_SF_ROOT: join(cwd, "no-sf"), SF_TARGET_ORG: "" }
+        env: isolatedEnv(cwd)
       });
       assert.ifError(result.error);
       for (const file of ["sfd.sock", "sfd.pid"]) assert.equal(existsSync(join(runtime, file)), false, "local command must not start the daemon");
@@ -91,7 +104,7 @@ test("CLI defaults to CLAUDE.md at project root from a child directory", t => {
   mkdirSync(join(cwd, "child"));
   const result = spawnSync(process.execPath, [cli, "agents-snippet", "--write"], {
     cwd: join(cwd, "child"), encoding: "utf8", timeout: 10000,
-    env: { ...process.env, SFD_RUNTIME_DIR: join(cwd, "runtime") }
+    env: isolatedEnv(cwd)
   });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stdout, "Updated CLAUDE.md\n");

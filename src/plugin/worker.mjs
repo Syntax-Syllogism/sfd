@@ -52,6 +52,7 @@ async function call(msg) {
   calls.set(msg.id, controller);
   /** @type {string[]} */
   const warnings = [];
+  let failures = 0;
   try {
     const parsed = op.descriptor.optionsSchema.safeParse(msg.options ?? {});
     if (!parsed.success) return failure("invalid-options", (parsed.error.issues ?? []).map((/** @type {{path?: (string | number)[], message: string}} */ i) => `${i.path?.join(".") ?? ""}: ${i.message}`).join("; ") || String(parsed.error));
@@ -59,19 +60,24 @@ async function call(msg) {
     const ctx = { signal: controller.signal, org: msg.org, projectRoot: msg.projectRoot,
       resolvePath: (/** @type {string} */ p) => resolve(msg.cwd, p),
       onProgress: (/** @type {import("../../packages/sfd-plugin/index.js").ProgressEvent} */ event) => send({ t: "progress", id: msg.id, event }),
+      reportFailures: (/** @type {number} */ count) => {
+        if (!Number.isInteger(count) || count < 0) throw Object.assign(new Error("reportFailures needs a non-negative integer"), { code: "invalid-failures" });
+        failures = count;
+      },
       notice: (/** @type {string} */ message) => { warnings.push(message); send({ t: "notice", id: msg.id, message }); } };
     for (let attempt = 0; ; attempt++) {
+      failures = 0;
       let started = false;
       try {
         controller.signal.throwIfAborted();
         const conn = msg.org ? await connection(msg.org) : undefined;
         controller.signal.throwIfAborted();
         started = true;
-        if (op.kind === "read") return success(await op.run(conn, parsed.data, ctx), warnings);
+        if (op.kind === "read") return success(await op.run(conn, parsed.data, ctx), warnings, failures);
         const plan = await op.plan(conn, parsed.data, ctx);
         if (!plan || typeof plan !== "object") return failure("invalid-plan", "Plan must be an object");
         if (effectsExceeding(op.descriptor.effects, plan.effects).length) return failure("plan-exceeds-effects", "Plan exceeds declared effects ceiling");
-        if (msg.mode === "plan") return { ...success(plan, warnings), plan };
+        if (msg.mode === "plan") return { ...success(plan, warnings, failures), plan };
         // Ask the host to validate this exact plan before applying it.
         send({ t: "plan", id: msg.id, plan });
         await new Promise((resolve, reject) => {
@@ -79,7 +85,7 @@ async function call(msg) {
           if (controller.signal.aborted) reject(controller.signal.reason);
         });
         controller.signal.throwIfAborted();
-        return { ...success(await op.apply(conn, plan, ctx), warnings), plan };
+        return { ...success(await op.apply(conn, plan, ctx), warnings, failures), plan };
       } catch (e) {
         const error = /** @type {any} */ (e);
         if (!["INVALID_SESSION_ID", "INVALID_AUTH_HEADER"].includes(error?.errorCode ?? error?.name)) throw e;

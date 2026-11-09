@@ -64,10 +64,11 @@ const mappings = [
 ];
 
 export function allMappings(table = { plugins: [] }) {
+  // --confirm is never forwarded: an sf flag cannot carry an sfd hash, and forwarding would bypass deny rules for sfd --confirm.
   const plugin = table.plugins.flatMap(p => p.commands.filter(c => c.sf).map(c => ({
     sf: c.sf.join(" "), sfd: c.name.join(" "), plugin: true, effects: c.effects?.length ? c.effects : ["org-write"],
     requiredFlags: c.flags.filter(f => f.required).map(f => f.name),
-    flags: [org, ["json", "--json", false], ["api-version", "--api-version", true], ...c.flags.filter(f => !["target-org", "json", "api-version"].includes(f.name)).map(f =>
+    flags: [org, ["json", "--json", false], ["api-version", "--api-version", true], ...c.flags.filter(f => !["target-org", "json", "api-version", "confirm"].includes(f.name)).map(f =>
       [[f.char, f.name].filter(Boolean).join(" "), `--${f.name}`, f.type !== "boolean", f.multiple])]
   })));
   return [...mappings, ...plugin.sort((a, b) => b.sf.split(" ").length - a.sf.split(" ").length)];

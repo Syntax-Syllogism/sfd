@@ -1,4 +1,7 @@
-# Plugins
+---
+title: Plugins
+description: "sfd runs experimental v0 plugin operations in isolated warm worker processes."
+---
 
 sfd runs experimental v0 plugin operations in isolated warm worker processes.
 
@@ -29,9 +32,13 @@ using the detected org type and exact plan. Production writes require
 approval hash when needed. `--plan` on a read exits 2.
 
 Default output is compact JSON data. Warnings and a truncation trailer go to
-stderr. `--json` prints the complete `{ok,data,warnings,...}` or
+stderr; plain plans print warnings before the `policy:` line. `--json` prints the
+complete `{ok,data,warnings,...}` or
 `{ok:false,code,message,actions,retryable}` envelope. Failures exit 1 and usage
-errors exit 2. Approval requirements and policy denials exit 4 and print the
+errors exit 2. A success with `failures > 0` (reported through
+`ctx.reportFailures`, see [plugin API](plugin-api.md)) also exits 1. It still
+prints its data and warnings, and plain mode adds a `failed: <n> item(s)` line
+to stderr. Approval requirements and policy denials exit 4 and print the
 status-4 shapes described in [safety policy](safety.md), not the envelope.
 Plugin list shows roots, versions, operation IDs, effects, worker state, RSS and
 validation problems; `--json` returns full objects.
@@ -69,8 +76,9 @@ integers must be safe integers, file/directory values resolve from the caller's
 cwd, and repeated flags build arrays. Required flags and unknown flags produce
 usage errors. Host flags include `-o`/`--target-org`, `--api-version`,
 `--confirm`, `--json`, `--plan`, `--quiet` and `-h`/`--help`. Direct commands
-pass the same safety gate as `op`: exit code 4 with a `--confirm` hash, which
-is reserved like `--target-org`. Built-in namespaces win collisions;
+pass the same safety gate as `op`: exit code 4 with a `--confirm` hash. A
+`cli.json` table cannot declare `confirm`, and rewritten sf commands never
+carry it. Built-in namespaces win collisions;
 otherwise the first discovered command wins. `plugin list` reports conflicts
 and invalid tables. Operations without a valid table still work through `op`.
 
@@ -155,6 +163,9 @@ measurements remain unavailable. The development benchmark is
   does not automatically replay a call whose worker crashed.
 - `plan-exceeds-effects`: fix the operation's plan or declared ceiling; apply
   did not run.
+- Exit 1 with `failed: <n> item(s)`: the operation finished, and its data and
+  warnings were printed. Some items failed, so check the data before you retry.
+  `--json` shows the same count as `failures` in the envelope.
 - Exit 4 `approval required`: review the printed plan, then repeat the same
   command with `--confirm <hash>` within ten minutes. A changed plan issues a new
   hash. Exit 4 `policy denied` has no hash and cannot be confirmed.

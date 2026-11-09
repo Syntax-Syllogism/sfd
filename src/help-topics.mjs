@@ -5,8 +5,36 @@ import { fileURLToPath } from "node:url";
 import { COMMANDS, commandUsage } from "./commands.mjs";
 
 const DOCS_DIR = fileURLToPath(new URL("../docs/", import.meta.url));
+// Guides carry Starlight frontmatter (`title`, optional `description`) for the
+// docs site. For the terminal, the frontmatter becomes an H1 so every consumer
+// below sees plain Markdown.
+export function parseFrontmatter(raw) {
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n*/);
+  if (!match) return { data: {}, body: raw };
+  const data = {};
+  for (const line of match[1].split(/\r?\n/)) {
+    const field = line.match(/^(\w+):\s*(.*?)\s*$/);
+    if (field) data[field[1]] = field[2].replace(/^(["'])(.*)\1$/, "$2");
+  }
+  return { data, body: raw.slice(match[0].length) };
+}
+
+const guideCache = new Map();
+function readGuide(file) {
+  if (!guideCache.has(file)) {
+    const { data, body } = parseFrontmatter(readFileSync(join(DOCS_DIR, file), "utf8"));
+    const markdown = data.title ? `# ${data.title}\n\n${body}` : body;
+    guideCache.set(file, { markdown, description: data.description });
+  }
+  return guideCache.get(file);
+}
+
 function readGuideFile(file) {
-  return readFileSync(join(DOCS_DIR, file), "utf8");
+  return readGuide(file).markdown;
+}
+
+function guideFiles() {
+  return readdirSync(DOCS_DIR).filter(file => file.endsWith(".md") && file !== "README.md").sort();
 }
 
 function guideName(file) {
@@ -27,14 +55,11 @@ function firstSentence(text) {
 }
 
 export function listGuides() {
-  return readdirSync(DOCS_DIR)
-    .filter(file => file.endsWith(".md"))
-    .sort()
-    .map(file => {
-      const content = readGuideFile(file);
+  return guideFiles().map(file => {
+      const { markdown: content, description } = readGuide(file);
       const title = content.match(/^#\s+(.+)\s*$/m)?.[1];
-      if (!title) throw new Error(`Guide ${file} must start with an H1 title.`);
-      return { name: guideName(file), title, description: firstSentence(firstParagraph(content)) };
+      if (!title) throw new Error(`Guide ${file} needs a frontmatter title or an H1.`);
+      return { name: guideName(file), title, description: firstSentence(description ?? firstParagraph(content)) };
     });
 }
 
@@ -68,7 +93,9 @@ export function extractSection(markdown, heading) {
 
 function rewriteDocLinks(markdown) {
   const guides = new Set(listGuides().map(guide => guide.name));
-  return markdown.replace(/\[([^\]]+)\]\((?!https?:\/\/)([^)]+\.md)(?:#[^)]*)?\)/g, (_match, label, target) => {
+  return markdown
+    .replace(/\[([^\]]+)\]\(https:\/\/github\.com\/Syntax-Syllogism\/sfd(?:#[^)]*)?\)/g, (_match, label) => `\`${label}: sfd help -a\``)
+    .replace(/\[([^\]]+)\]\((?!https?:\/\/)([^)]+\.md)(?:#[^)]*)?\)/g, (_match, label, target) => {
     const name = guideName(basename(target));
     const readableLabel = label.replace(/\.md$/i, "");
     return guides.has(name) ? `\`${readableLabel}: sfd help ${name}\`` : `\`${readableLabel}: sfd help -a\``;
@@ -78,7 +105,7 @@ function rewriteDocLinks(markdown) {
 export function renderGuide(name) {
   const guide = listGuides().find(item => item.name === name);
   if (!guide) return undefined;
-  const file = readdirSync(DOCS_DIR).find(candidate => guideName(candidate) === guide.name);
+  const file = guideFiles().find(candidate => guideName(candidate) === guide.name);
   const content = readGuideFile(file);
   return rewriteDocLinks(content);
 }

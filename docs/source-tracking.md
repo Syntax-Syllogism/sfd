@@ -1,4 +1,7 @@
-# Source tracking, retrieve and deploy
+---
+title: Source tracking, retrieve and deploy
+description: "sfd retrieve, sfd tracking, and how sfd deploy keeps source tracking in step."
+---
 
 `sfd retrieve`, `sfd tracking`, and how `sfd deploy` keeps source tracking in
 step. Source: `src/handlers.mjs` (`retrieve`, `tracking`, `deploy`, and the
@@ -8,7 +11,7 @@ Tests: `test/handlers.test.mjs`, `test/format.test.mjs`, `test/cli.test.mjs`.
 
 The Salesforce work is done by `@salesforce/source-deploy-retrieve` and
 `@salesforce/source-tracking`, loaded from the `sf` install (see the
-[README](../README.md#daemon-lifecycle)). sfd only chooses the selectors, applies
+[README](https://github.com/Syntax-Syllogism/sfd#daemon-lifecycle)). sfd only chooses the selectors, applies
 the conflict rules below, and formats the result.
 
 ## Retrieve
@@ -98,7 +101,7 @@ result immediately should wait for the earlier command.
 
 Deploy and retrieve wait up to 33 minutes by default; `-w <minutes>` changes
 the wait. The client deadline is extended to that wait plus 60 seconds, and
-`SFD_TIMEOUT_SECONDS` overrides it (see the [README](../README.md#environment)).
+`SFD_TIMEOUT_SECONDS` overrides it (see the [README](https://github.com/Syntax-Syllogism/sfd#environment)).
 
 ## Changing this area
 

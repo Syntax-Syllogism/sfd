@@ -1,4 +1,7 @@
-# Metadata listing
+---
+title: Metadata listing
+description: "sfd list-metadata-types and sfd list-metadata: the supported type list and its daemon cache, how member listings are queried, folder-based types, unknown type suggestions, output formats and the --json shape."
+---
 
 `sfd list-metadata-types` and `sfd list-metadata`: the supported type list and
 its daemon cache, how member listings are queried, folder-based types, unknown

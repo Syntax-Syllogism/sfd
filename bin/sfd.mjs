@@ -119,6 +119,23 @@ function print(value) {
   process.stdout.write((typeof value === "string" ? value : JSON.stringify(value, null, 2)) + "\n");
 }
 
+async function renderPluginResult(result, values, format) {
+  if (values.json) print(result);
+  else if (result.ok) {
+    print(result.policy ? result.data : await format(result.data));
+    for (const warning of result.warnings ?? []) process.stderr.write(`warning: ${warning}\n`);
+    if (result.failures > 0) process.stderr.write(`failed: ${result.failures} item(s)\n`);
+    if (result.policy) {
+      process.stderr.write(`policy: ${result.policy.decision}\n`);
+      if (result.policy.hash) process.stderr.write(`re-run with: --confirm ${result.policy.hash}   (valid 10 min)\n`);
+    } else if (result.truncated) process.stderr.write(`… result truncated (total ${result.total ?? "unknown"})\n`);
+  } else {
+    process.stderr.write(`${result.code}: ${result.message}\n`);
+    for (const action of result.actions) process.stderr.write(`  → ${action}\n`);
+  }
+  return !result.ok ? (result.code === "usage" ? 2 : 1) : result.failures > 0 ? 1 : 0;
+}
+
 async function run(argv) {
   // Version is a side-effect-free global flag. It takes precedence over commands and --sf-json.
   if (argv.includes("--version")) { print(`sfd ${VERSION}`); return 0; }
@@ -184,21 +201,7 @@ async function run(argv) {
       } });
       if (res.status !== 0) return responseError(res, values);
       const result = res.result;
-      if (values.json) print(result);
-      else if (result.policy) {
-        print(result.data);
-        process.stderr.write(`policy: ${result.policy.decision}\n`);
-        if (result.policy.hash) process.stderr.write(`re-run with: --confirm ${result.policy.hash}   (valid 10 min)\n`);
-      }
-      else if (result.ok) {
-        print(await formatPlugin(result.data, command));
-        for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
-        if (result.truncated) process.stderr.write(`… result truncated (total ${result.total ?? "unknown"})\n`);
-      } else {
-        process.stderr.write(`${result.code}: ${result.message}\n`);
-        for (const action of result.actions) process.stderr.write(`  → ${action}\n`);
-      }
-      return result.ok ? 0 : result.code === "usage" ? 2 : 1;
+      return renderPluginResult(result, values, data => formatPlugin(data, command));
     }
   }
   const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
@@ -279,21 +282,7 @@ async function run(argv) {
       print(values.json ? result : result.map(p => `${p.name} ${p.version}  ${p.root}  ${p.operations.map(o => `${o.id} [${o.effects.join(",")}]`).join("; ")}  ${p.worker}${p.rss ? ` (${Math.round(p.rss / 1024 / 1024)} MiB)` : ""}${p.problems.length ? `  ${p.problems.join("; ")}` : ""}`).join("\n"));
       return 0;
     }
-    if (values.json) print(result);
-    else if (result.policy) {
-      print(result.data);
-      process.stderr.write(`policy: ${result.policy.decision}\n`);
-      if (result.policy.hash) process.stderr.write(`re-run with: --confirm ${result.policy.hash}   (valid 10 min)\n`);
-    }
-    else if (result.ok) {
-      print(JSON.stringify(result.data) ?? "null");
-      for (const warning of result.warnings) process.stderr.write(`warning: ${warning}\n`);
-      if (result.truncated) process.stderr.write(`… result truncated (total ${result.total ?? "unknown"})\n`);
-    } else {
-      process.stderr.write(`${result.code}: ${result.message}\n`);
-      for (const action of result.actions) process.stderr.write(`  → ${action}\n`);
-    }
-    return result.ok ? 0 : result.code === "usage" ? 2 : 1;
+    return renderPluginResult(result, values, data => JSON.stringify(data) ?? "null");
   }
 
   // Lifecycle commands.

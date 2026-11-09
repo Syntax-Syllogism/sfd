@@ -1,4 +1,7 @@
-# Discover
+---
+title: Discover
+description: "sfd discover: which local transcripts are read, how each shell call is classified, how the savings estimates are derived, the text and --json output, and the diagnostics."
+---
 
 `sfd discover`: which local transcripts are read, how each shell call is
 classified, how the savings estimates are derived, the text and `--json`

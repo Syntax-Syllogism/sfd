@@ -7,7 +7,7 @@ import { rewrite } from "./rewrite.mjs";
 import { builtinEffects, loadPolicy, decide, effectiveOrgType } from "./policy.mjs";
 import { UsageError } from "./usage-error.mjs";
 
-const USAGE = "Usage: sfd hook claude|codex|gemini|check [--shell posix|powershell] <command>|install|uninstall --agent <agent> [--project]";
+const USAGE = "Usage: sfd hook claude|codex|gemini|check [--shell posix|powershell] <command>|install|uninstall --agent <agent> [--project] [--no-deny-confirm]";
 
 const agents = {
   claude: { directory: ".claude", file: "settings.json", event: "PreToolUse", tool: "Bash" },
@@ -62,9 +62,11 @@ export function handle(agent, inputJson, env = process.env, platform = process.p
 
 function object(value) { return value !== null && typeof value === "object" && !Array.isArray(value); }
 
-export function editSettings(action, agent, { project = false, cwd = process.cwd(), home = homedir() } = {}) {
+export const CONFIRM_DENY_RULES = Object.freeze(["Bash(sfd * --confirm *)", "Bash(sfd --confirm *)", "Bash(sfd *--confirm=*)"]);
+
+export function editSettings(action, agent, { project = false, cwd = process.cwd(), home = homedir(), denyConfirm = true } = {}) {
   const config = agents[agent];
-  if (!config || !["install", "uninstall"].includes(action)) throw new UsageError("Expected install|uninstall --agent claude|codex|gemini [--project]");
+  if (!config || !["install", "uninstall"].includes(action)) throw new UsageError("Expected install|uninstall --agent claude|codex|gemini [--project] [--no-deny-confirm]");
   const file = join(project ? cwd : home, config.directory, config.file);
   let original, settings = {};
   try { original = readFileSync(file, "utf8"); settings = JSON.parse(original); }
@@ -72,20 +74,42 @@ export function editSettings(action, agent, { project = false, cwd = process.cwd
   if (!object(settings) || (settings.hooks !== undefined && !object(settings.hooks))) throw Error(`Invalid hooks settings in ${file}`);
   const entries = settings.hooks?.[config.event] ?? [];
   if (!Array.isArray(entries) || entries.some(entry => !object(entry) || !Array.isArray(entry.hooks))) throw Error(`Invalid ${config.event} settings in ${file}`);
+  // Only Claude Code has permissions.deny; other agents' permission settings are never touched.
+  const permissions = agent === "claude";
+  if (permissions && settings.permissions !== undefined && !object(settings.permissions)) throw Error(`Invalid permissions settings in ${file}`);
+  const deny = permissions ? settings.permissions?.deny ?? [] : [];
+  if (!Array.isArray(deny)) throw Error(`Invalid permissions.deny settings in ${file}`);
   const isSfd = hook => hook?.type === "command" && typeof hook.command === "string" && new RegExp(`^sfd hook ${agent}(?:\\s|$)`).test(hook.command);
   const exists = entries.some(entry => entry.hooks.some(isSfd));
-  if ((action === "install") === exists) return { file, changed: false };
-  let updated;
-  if (action === "install") {
-    updated = [...entries, { matcher: config.tool, hooks: [{ type: "command", command: `sfd hook ${agent}` }] }];
-  } else {
-    updated = entries.flatMap(entry => {
-      const hooks = entry.hooks.filter(hook => !isSfd(hook));
-      return hooks.length === entry.hooks.length ? [entry] : hooks.length ? [{ ...entry, hooks }] : [];
-    });
+  // The hook entry and the deny rules are reconciled independently, so re-running install adds rules an older install lacked.
+  const denyAdded = permissions && action === "install" && denyConfirm ? CONFIRM_DENY_RULES.filter(rule => !deny.includes(rule)) : [];
+  const denyRemoved = permissions && action === "uninstall" ? CONFIRM_DENY_RULES.filter(rule => deny.includes(rule)) : [];
+  const hookChanged = (action === "install") !== exists;
+  if (!hookChanged && !denyAdded.length && !denyRemoved.length) return { file, changed: false, denyAdded, denyRemoved };
+  if (hookChanged) {
+    let updated;
+    if (action === "install") {
+      updated = [...entries, { matcher: config.tool, hooks: [{ type: "command", command: `sfd hook ${agent}` }] }];
+    } else {
+      updated = entries.flatMap(entry => {
+        const hooks = entry.hooks.filter(hook => !isSfd(hook));
+        return hooks.length === entry.hooks.length ? [entry] : hooks.length ? [{ ...entry, hooks }] : [];
+      });
+    }
+    settings.hooks ??= {};
+    settings.hooks[config.event] = updated;
   }
-  settings.hooks ??= {};
-  settings.hooks[config.event] = updated;
+  if (denyAdded.length) {
+    settings.permissions ??= {};
+    settings.permissions.deny = [...deny, ...denyAdded];
+  }
+  if (denyRemoved.length) {
+    // sfd cannot tell whether it created these keys, so it removes them only when nothing else is left.
+    const remaining = deny.filter(rule => !CONFIRM_DENY_RULES.includes(rule));
+    if (remaining.length) settings.permissions.deny = remaining;
+    else delete settings.permissions.deny;
+    if (!Object.keys(settings.permissions).length) delete settings.permissions;
+  }
   mkdirSync(dirname(file), { recursive: true });
   if (original !== undefined) {
     try { copyFileSync(file, `${file}.bak`, constants.COPYFILE_EXCL); }
@@ -98,7 +122,7 @@ export function editSettings(action, agent, { project = false, cwd = process.cwd
   } finally {
     try { unlinkSync(temporary); } catch (error) { if (error.code !== "ENOENT") throw error; }
   }
-  return { file, changed: true };
+  return { file, changed: true, denyAdded, denyRemoved };
 }
 
 export function runHook(argv) {
@@ -125,9 +149,12 @@ export function runHook(argv) {
     return result.skip ? 1 : 0;
   }
   if (["install", "uninstall"].includes(action)) {
-    const { values } = parseArgs({ args, options: { agent: { type: "string" }, project: { type: "boolean" } } });
-    const result = editSettings(action, values.agent, { project: values.project });
+    const { values } = parseArgs({ args, options: { agent: { type: "string" }, project: { type: "boolean" }, "no-deny-confirm": { type: "boolean" } } });
+    // --no-deny-confirm is accepted as a no-op for agents without permission rules.
+    const result = editSettings(action, values.agent, { project: values.project, denyConfirm: !values["no-deny-confirm"] });
     process.stdout.write(`${result.changed ? "Updated" : "Unchanged"} ${result.file}\n`);
+    if (result.denyAdded.length) process.stdout.write(`Added permissions.deny: ${result.denyAdded.join(", ")}\n`);
+    if (result.denyRemoved.length) process.stdout.write(`Removed permissions.deny: ${result.denyRemoved.join(", ")}\n`);
     if (action === "install" && values.agent === "codex") process.stdout.write("Review and trust the hook with /hooks in Codex before it can run.\n");
     return 0;
   }

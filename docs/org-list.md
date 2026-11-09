@@ -1,4 +1,7 @@
-# Org list
+---
+title: Org list
+description: "sfd org list: which local orgs are listed, how defaults, types and expiry are derived, what --status checks and how it is bounded, the --json allowlist, the sf-compatible --sf-json envelope, and the no-token rule."
+---
 
 `sfd org list`: which local orgs are listed, how defaults, types and expiry are
 derived, what `--status` checks and how it is bounded, the `--json` allowlist,

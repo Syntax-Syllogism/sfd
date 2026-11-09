@@ -1,4 +1,7 @@
-# Debug logs
+---
+title: Debug logs
+description: "sfd logs, sfd logs get and sfd test --logs: listing and reading Apex debug logs, the TraceFlag setup they trigger, and the filtered output format."
+---
 
 `sfd logs`, `sfd logs get` and `sfd test --logs`: listing and reading Apex
 debug logs, the TraceFlag setup they trigger, and the filtered output format.

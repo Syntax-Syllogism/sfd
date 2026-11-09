@@ -16,6 +16,8 @@ registry therefore always match what `sf` uses.
 Run installed plugin operations with [the plugin host](docs/plugins.md).
 Plugin authors: see the [experimental v0 operation contract](docs/plugin-api.md).
 
+The guides are also published at <https://syntax-syllogism.com/sfd/docs/>.
+
 ## Install
 
 ```bash
@@ -112,7 +114,8 @@ filtering, status checks and the JSON allowlist are described in
 [docs/org-list.md](docs/org-list.md).
 
 Exit codes: `0` success, `1` the operation failed (including a compile error,
-a failed deploy, or a failing test), `2` usage error, `3` the daemon could
+a failed deploy, a failing test, or a plugin operation that reported failed items),
+`2` usage error, `3` the daemon could
 not be reached or started, or a request timed out, `4` approval required or policy denied.
 Production writes require a single-use `--confirm <hash>`; see
 [Safety policy](docs/safety.md). Unreadable input files are
@@ -192,6 +195,7 @@ filtered output format and `test --logs` behavior are in
 | `SFD_SF_ROOT` | `@salesforce/cli` install to load libraries from, instead of the `sf` on `PATH`. |
 | `SFD_HANDLERS_MODULE` | Test seam: stub handlers module used by the CLI tests. |
 | `SFD_HOOK_SHELL` | Force hook parsing and quoting to `posix` or `powershell`. Invalid values disable rewriting. Gemini defaults to PowerShell on Windows; Codex on native Windows requires an explicit override. |
+| `SFD_HOOK_DISABLE` | Set to `1` to make every agent hook return no opinion (no rewrite, no permission decision). `sfd hook check` reports `skip: SFD_HOOK_DISABLE=1`. |
 
 ## Testing
 
@@ -235,7 +239,9 @@ sfd hook install --agent codex
 sfd hook install --agent gemini
 ```
 
-Add `--project` to install into the current project instead. Preview a rewrite
+Add `--project` to install into the current project instead. For Claude Code,
+install also adds deny rules to `permissions.deny` so an agent cannot approve its
+own `--confirm` prompts; pass `--no-deny-confirm` to skip them. Preview a rewrite
 with `sfd hook check '<sf command>'`. Query result format `-r csv` (or
 `--result-format csv`) maps to `sfd query --csv`. The supported commands,
 adapter details, skip rules and the `SFD_HOOK_DISABLE=1` switch are in

@@ -1,4 +1,7 @@
-# CLI help and version
+---
+title: CLI help and version
+description: "sfd --help, sfd <command> --help and sfd --version are generated from the COMMANDS table in src/commands.mjs."
+---
 
 `sfd --help`, `sfd <command> --help` and `sfd --version` are generated from the
 `COMMANDS` table in `src/commands.mjs`. None of them contacts or starts the

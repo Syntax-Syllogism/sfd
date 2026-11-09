@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { COMMANDS } from "../src/commands.mjs";
-import { assertManualMappings, extractSection, listGuides, renderCommandManual, renderGuide } from "../src/help-topics.mjs";
+import { assertManualMappings, extractSection, listGuides, parseFrontmatter, renderCommandManual, renderGuide } from "../src/help-topics.mjs";
 
 test("every registered command has a renderable manual and mapped docs exist", () => {
   assert.doesNotThrow(assertManualMappings);
@@ -58,4 +58,14 @@ test("manual agent tips omit leading separators and preserve argument tips", () 
   assert.match(renderCommandManual("status"), /## Tips for agents\n\ndaemon status/);
   assert.match(renderCommandManual("org"), /## Tips for agents\n\nresolved org details/);
   assert.match(renderCommandManual("query"), /## Tips for agents\n\n"<soql>" --csv --limit 200: SOQL/);
+});
+
+test("guides read their title and description from frontmatter and skip the docs index", () => {
+  const guides = listGuides();
+  assert.ok(!guides.some(guide => guide.name === "README"));
+  const tracking = guides.find(guide => guide.name === "source-tracking");
+  assert.equal(tracking.title, "Source tracking, retrieve and deploy");
+  assert.match(renderGuide("source-tracking"), /^# Source tracking, retrieve and deploy\n\n(?!---)/);
+  assert.equal(parseFrontmatter("---\ntitle: \"A: b\"\ndescription: Hi.\n---\n\nBody").data.title, "A: b");
+  assert.deepEqual(parseFrontmatter("# No frontmatter").data, {});
 });

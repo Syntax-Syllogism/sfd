@@ -1,4 +1,7 @@
-# Plugin API v0
+---
+title: Plugin API v0
+description: "The experimental v0 operation contract defines the manifest, operations and test helpers for sfd plugins."
+---
 
 The experimental v0 operation contract defines the manifest, operations and test helpers for sfd plugins.
 
@@ -82,15 +85,17 @@ replay is safe, including after an uncertain timeout.
 
 `OperationContext` supplies `signal: AbortSignal`,
 `onProgress(event: ProgressEvent)`, `notice(message: string)`,
-`resolvePath(path: string)`, and optional `projectRoot` and `org`.
+`resolvePath(path: string)`, optional `reportFailures(count: number)`, and optional `projectRoot` and `org`.
 `ProgressEvent` has a required `phase: string` and optional `done: number`,
 `total: number`, and `message: string`. Notices are short human messages for
 stderr; return structured data separately.
 
+Call `ctx.reportFailures?.(count)` with a non-negative integer to report completed item failures from `run`, `plan`, or `apply`. The last call wins across plan and apply; a positive count appears in the success envelope and causes exit 1 while data and warnings are still printed. The optional call supports older hosts without this method. Invalid counts cause an `invalid-failures` error.
+
 `projectRoot` is present when `requiresProject` is true, or when the client is
 inside an sfdx project. `resolvePath` resolves user paths against the client's
 cwd. Never use `process.cwd()` or change the process cwd. Operations must not call
-`process.exit`, set `process.exitCode`, prompt, or add process-wide listeners.
+`process.exit`, set `process.exitCode`, prompt, or add process-wide listeners; use `reportFailures` for partial failures.
 Honor cancellation through `signal` and report progress through the context.
 
 `OrgInfo` contains `username: string`, `apiVersion: string`, `type: OrgType`,
@@ -128,7 +133,7 @@ Operations return plain data. They may throw an error with the
 wrapping results into `Envelope<R>`, the union of:
 
 ```ts
-type Ok<R> = { ok: true; data: R; total?: number; truncated?: boolean; warnings: string[] };
+type Ok<R> = { ok: true; data: R; total?: number; truncated?: boolean; failures?: number; warnings: string[] };
 type Err = { ok: false; code: string; message: string; actions: string[];
              retryable: "safe" | "unsafe" | "no" };
 ```
@@ -147,7 +152,9 @@ option keys against `optionsSchema.shape`. Without a shape, key validation is
 skipped with a warning. Names must start with the operation namespace; command
 names, flag names and single-letter aliases must be unique within their scope.
 Host flags `target-org` and `api-version` omit `option`; `o` and `h` are reserved
-aliases. Paths in custom formatters start with `./` and stay under the real
+aliases. A table cannot declare `confirm`: the host adds `--confirm <hash>` to
+every direct command, and the rewrite hook never forwards `--confirm` from an sf
+command. Paths in custom formatters start with `./` and stay under the real
 plugin root, including through symlinks.
 
 Use `sfd plugin init [root] [--ops echo.say,…] [--write]` to generate an initial
@@ -198,7 +205,7 @@ no Zod runtime dependency.
 `/testkit` exports:
 
 - `stubContext(overrides = {})`: a `StubContext` with fresh cancellation signal,
-  `_progress: ProgressEvent[]`, `_notices: string[]`, and collecting callbacks.
+  `_progress: ProgressEvent[]`, `_notices: string[]`, `_failures?: number`, and collecting callbacks.
   Accepts context overrides and `cwd` (default `/tmp/sfd-testkit`) for path
   resolution. The arrays belong to each context independently.
 - `stubOrg(overrides = {})`: `OrgInfo` with `test@example.com`, API `67.0`,
@@ -209,6 +216,7 @@ no Zod runtime dependency.
   `{ data }`. For writes it plans, checks the effects ceiling, optionally awaits
   `confirmPlan(plan)`, and applies unless confirmation returns exactly false.
   A declined confirmation returns `{ plan }`; applying returns `{ plan, data }`.
+  Results include `failures` when the context recorded a count, including zero.
   `ctx` defaults to `stubContext()`. Invalid options throw code
   `invalid-options`; widened plans throw `plan-exceeds-effects` before
   confirmation or application. Operation errors propagate unchanged.
@@ -218,7 +226,7 @@ no Zod runtime dependency.
 `RunOperationOptions<O>` describes runner inputs (`options: unknown` is parsed
 by the schema, with optional `conn` and `ctx`). The write overload also accepts
 synchronous or asynchronous confirmation. `StubContext` extends
-`OperationContext` with its two collection arrays.
+`OperationContext` with its collection arrays and recorded failure count.
 
 ```js
 import { assertConformance, runOperation, stubContext } from "@syntax-syllogism/sfd-plugin";
