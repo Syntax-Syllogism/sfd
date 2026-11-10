@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, symlinkSync, rmSync, chownSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { paths, socketPath, isPipe } from "../src/paths.mjs";
+import { paths, socketPath, isPipe, resetPathsCache } from "../src/paths.mjs";
 
-test("Unix uses a socket file in the runtime dir", () => {
+test("Unix uses a socket file in the runtime dir", { skip: process.platform === "win32" && "POSIX permission checks need a Unix host" }, () => {
   const dir = mkdtempSync(join(tmpdir(), "sfd-paths-"));
   const p = paths({ SFD_RUNTIME_DIR: dir }, "linux");
   assert.equal(p.socket, join(dir, "sfd.sock"));
@@ -33,4 +33,24 @@ test("Windows pipe names differ per runtime dir and ignore case", () => {
 test("Windows defaults the runtime dir to LOCALAPPDATA", () => {
   const local = mkdtempSync(join(tmpdir(), "sfd-local-"));
   assert.equal(paths({ LOCALAPPDATA: local }, "win32").dir, join(local, "sfd"));
+});
+
+
+test("runtime directories are validated and memoized", { skip: process.platform === "win32" }, t => {
+  const root = mkdtempSync(join(tmpdir(), "sfd-path-check-"));
+  t.after(() => { resetPathsCache(); rmSync(root, { recursive: true, force: true }); });
+  const link = join(root, "link");
+  symlinkSync(root, link);
+  assert.throws(() => paths({ SFD_RUNTIME_DIR: link }), /not a directory/);
+  const dir = join(root, "runtime");
+  const first = paths({ SFD_RUNTIME_DIR: dir });
+  rmSync(dir, { recursive: true });
+  assert.deepEqual(paths({ SFD_RUNTIME_DIR: dir }), first);
+});
+
+test("runtime directories owned by another uid are refused", { skip: process.platform === "win32" || process.getuid?.() !== 0 }, t => {
+  const dir = mkdtempSync(join(tmpdir(), "sfd-owner-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  chownSync(dir, 1, 1);
+  assert.throws(() => paths({ SFD_RUNTIME_DIR: dir }), /owned by uid 1/);
 });

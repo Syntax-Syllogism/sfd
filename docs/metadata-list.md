@@ -6,13 +6,13 @@ description: "sfd list-metadata-types and sfd list-metadata: the supported type 
 `sfd list-metadata-types` and `sfd list-metadata`: the supported type list and
 its daemon cache, how member listings are queried, folder-based types, unknown
 type suggestions, output formats and the `--json` shape. Source:
-`src/handlers.mjs` (`metadataTypes`, `metadataSuggestion`, `listMetadataTypes`,
-`listMetadata`, and the `typeCache` clears in `refreshIfAuthChanged`, `reload`
-and `withConn`), `src/format.mjs` (`formatMetadataTypes`, `formatMetadataList`),
+`src/org-session.mjs` (`metadataTypes`, and the `typeCache` clears in `invalidate`),
+`src/sf-util.mjs` (`metadataSuggestion`), `src/ops/list-metadata-types.mjs`,
+`src/ops/list-metadata.mjs`, `src/format.mjs` (`formatMetadataTypes`, `formatMetadataList`),
 `bin/sfd.mjs` (the `list-metadata-types` and `list-metadata` cases, `--folder`
 and `--details`), `src/commands.mjs` (their `COMMANDS` entries) and
 `src/rewrite.mjs` (the `org list metadata-types` and `org list metadata`
-mappings). Tests: `test/handlers.test.mjs` (the metadata cases),
+mappings). Tests: `test/ops-metadata.test.mjs`, `test/org-session.test.mjs` (the metadata cache),
 `test/format.test.mjs`, `test/cli.test.mjs`, `test/rewrite.test.mjs`, and the
 opt-in real-org case in `test/org.test.mjs` (needs `SFD_TEST_ORG`).
 
@@ -31,9 +31,14 @@ sfd list-metadata -m Report --folder Public_Reports --details
   connection's API version. A pending describe is stored, so simultaneous
   callers share one request. A failed describe is removed, so the next call
   retries.
-- The cache is cleared for every org when the auth stamp changes
-  (`refreshIfAuthChanged`) or on `sfd reload`. It is cleared for one alias when
-  `withConn` rebuilds an expired or revoked session.
+- The cache is cleared for every org when the auth stamp changes or on
+  `sfd reload`. It is cleared for the affected username's aliases when `withConn`
+  sees a session error (`INVALID_SESSION_ID` or `INVALID_AUTH_HEADER`), whether
+  or not the call is retried. Both paths go through `invalidate`. The auth stamp
+  covers the `.sfdx` JSON filenames and the alias and config files in `~/.sf`
+  and `~/.sfdx`. Changes to the contents of an existing `.sfdx` JSON file,
+  including token refreshes, do not clear caches. See
+  [auth-cache.md](auth-cache.md).
 - The JSON result includes `cached`, which is `true` when the type list was
   already in memory.
 - Member lists are never cached. Every `list-metadata` call is live.
@@ -56,7 +61,7 @@ sfd list-metadata -m Report --folder Public_Reports --details
    otherwise. That group is marked `folders` and gets a hint. With `--folder`,
    the query is `{ type, folder }` for the type itself.
 5. `conn.metadata.list` accepts at most three queries per call. Queries are
-   split into chunks of three, and the chunks run with `Promise.all`.
+   split into chunks of three, with at most two chunks running at once.
 6. The response is normalized with `asArray`, because the server may return
    nothing, one object or an array. Members are matched to their group by
    `type` and sorted by `fullName`. Each member keeps `fullName`,
@@ -116,8 +121,8 @@ group, `folders: true` and `folderType`.
 
 ## Keeping it in sync
 
-- Changes to the cache, batching or folder rules belong in `src/handlers.mjs`.
-  Update this file and the handler tests together.
+- Changes to the cache belong in `src/org-session.mjs`; batching and folder rules
+  belong in `src/ops/list-metadata.mjs`. Update this file and their tests together.
 - A new listing option needs a `bin/sfd.mjs` option, a usage check, a `COMMANDS`
   entry (see [agents-snippet.md](agents-snippet.md)), a README row, and a
   rewrite entry when `sf` has an equivalent.

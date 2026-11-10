@@ -35,7 +35,7 @@ version.
 
 | Command | Does | `sf` equivalent |
 | --- | --- | --- |
-| `sfd query "<soql>"` | SOQL, all pages by default, `attributes` stripped. `--limit <n>` caps rows; `--csv` prints CSV. `--tooling`, `--all`, `--raw` for the unstripped result | `sf data query` |
+| `sfd query "<soql>"` | SOQL, first 2,000 rows by default (`--no-limit` for all), `attributes` stripped. `--limit <n>` caps rows; `--csv` prints CSV. `--tooling`, `--all`, `--raw` for the unstripped result | `sf data query` |
 | `sfd apex [file]` | Anonymous Apex from a file, `-f`, or stdin. Prints `USER_DEBUG` and fatal lines; `--log` for the full log | `sf apex run` |
 | `sfd rest <path>` | REST call. `-X <method>`, `--body <json\|@file>` | `sf api request rest` |
 | `sfd list-metadata-types` | Supported metadata types, folder markers and child types; cached per org and API version | `sf org list metadata-types` |
@@ -44,7 +44,7 @@ version.
 | `sfd deploy -d <path> \| -m <Type[:Name]>` | Deploy source. `--check-only`, `-l <level>`, `-t <test>`, `-w <minutes>` | `sf project deploy start` |
 | `sfd retrieve [-d <path> \| -m <Type[:Name]> \| -x <package.xml>]` | Retrieve source; no selector pulls tracked remote changes. `--ignore-conflicts`, `-w <minutes>` | `sf project retrieve start` |
 | `sfd tracking [--local \| --remote] [--conflicts]` | List local, remote and conflicting source-tracked changes; `--conflicts` shows only conflicts | |
-| `sfd test` | Run Apex tests. `-n <class>`, `-t <Class.method>`, `-s <suite>`, `-l <level>`, `-c` (coverage), `-w <minutes>`, `--logs`, `-y/--synchronous` (one class) | `sf apex run test --wait` |
+| `sfd test` | Run Apex tests. `-n <class>`, `-t <Class.method>`, `-s <suite>`, `-l <level>`, `-c` (coverage), `-w <minutes>`, `--logs`, `--no-trace`, `-y/--synchronous` (one class) | `sf apex run test --wait` |
 | `sfd logs [--count 10] [--user <username>]` | Recent debug logs, one line each; `--limit` aliases `--count` | `sf apex list log` |
 | `sfd logs get <id\|latest>` | Debug, exception, validation, Flow error and high limit usage lines. `--full` prints raw text | `sf apex get log` |
 | `sfd org list [--all] [--status]` | Local authenticated orgs; `--all` includes expired scratch orgs, `--status` adds live checks | `sf org list --skip-connection-status` |
@@ -62,9 +62,10 @@ CSV layout, output by flag and truncation trailer are described in
 [docs/query.md](docs/query.md).
 
 `-d`, `-m`, `-n`, `-t` and `-s` repeat or take comma-separated lists. The org
-commands take `-o <alias>` (except `org list`), and `--json` prints the raw daemon response. Without `-o`
-the org resolves like `sf`: `SF_TARGET_ORG`, then the nearest
-`.sf/config.json`, then the global config.
+commands take `-o <alias>` (except `org list`). `--json` prints the raw daemon
+response; `org list --json` has its own shape (see below). Without `-o` the org
+resolves like `sf`: `SF_TARGET_ORG`, then the nearest `.sf/config.json`, then the
+global config.
 
 `--sf-json` prints sf-compatible JSON for `query`, `describe`, `apex`, `org`
 and `org list`, including warnings and error envelopes. It cannot be combined
@@ -73,8 +74,9 @@ queries fetch all pages. See [agent hooks](docs/agent-hooks.md#sf-compatible-jso
 
 `sfd list-metadata-types` sorts supported types, marks folder-based types with
 `(folder)` and shows up to six child names. Its daemon cache is scoped to the org
-and connection API version, and cleared by `sfd reload`, auth changes or session
-reconnection. `--json` includes `result.cached` and `result.apiVersion`.
+and connection API version. It is cleared for every org by `sfd reload` or an
+auth change, and for the affected org by a session expiry.
+`--json` includes `result.cached` and `result.apiVersion`.
 
 `sfd list-metadata -m Flow,Layout` lists sorted names grouped by requested type.
 Repeat `-m` to add types. `--details` adds the modification date, modifying user,
@@ -95,7 +97,7 @@ sfd list-metadata -m ApexClass --details
 `sfd org list` reads local auth without network calls. It shows aliases, usernames,
 `*` for the default org, `H` for the default Dev Hub, org types and scratch expiry.
 Expired scratch orgs are hidden with a count hint; use `--all` to include them.
-`--status` checks non-scratch connections in parallel with a 10-second deadline
+`--status` runs at most four non-scratch checks and Dev Hub queries at a time, with a 10-second deadline
 per org, and queries scratch status once per Dev Hub (also bounded to 10 seconds).
 Unavailable Dev Hubs leave scratch status blank. New logins and logouts are picked
 up automatically. This command rejects `-o`.
@@ -128,11 +130,14 @@ commands, data import).
 
 The first command starts the daemon detached; there is nothing to set up. It
 listens on a Unix socket in `$XDG_RUNTIME_DIR/sfd-<uid>/` (or the system temp
-directory), in a directory with mode `0700` and a socket with mode `0600`.
-On Windows it listens on a per-user named pipe (`\\.\pipe\sfd-<hash>`), and
-the log and pid files go in `%LOCALAPPDATA%\sfd\`.
+directory). sfd sets that directory to mode `0700` and the socket to `0600`.
+sfd refuses a runtime directory that is a symbolic link, is not a directory, or is
+owned by another user (exit 3); remove it or set `SFD_RUNTIME_DIR` to a directory
+you own. See [docs/daemon.md](docs/daemon.md#runtime-directory).
+On Windows it listens on a named pipe (`\\.\pipe\sfd-<hash>`). The pipe name is not
+an access control. The log and pid files go in `%LOCALAPPDATA%\sfd\`.
 Access tokens stay in daemon memory and are never written to disk. The daemon
-log is `sfd.log` in the same directory; `sfd status` prints its path.
+log is `sfd.log` in the same directory; `sfd status` prints its path and any last-seen API usage per org. The log contains JSON lines, including request timings and status; request bodies and SOQL text are omitted. It rotates at 5 MiB to `sfd.log.1` (one previous log is kept). Early startup errors go to `sfd.boot.log`, which is truncated at each spawn.
 
 The daemon exits on its own when:
 
@@ -146,19 +151,37 @@ In each case it stops accepting connections at once, finishes in-flight
 requests (a running deploy or test run is not cut off), and the next call
 starts a fresh daemon.
 
+`SIGTERM` or `SIGINT` (Ctrl-C) takes the same path: in-flight requests get up to
+10 seconds to finish, then the daemon removes its socket and pid file and exits.
+A second signal exits at once. Requests over 8 MiB, and connections that send no
+complete line within 30 seconds, are refused without affecting the idle timer.
+The socket protocol, its limits and the signal rules are described in
+[docs/daemon.md](docs/daemon.md).
+
 Auth changes made with `sf org login` or `sf alias set` are picked up
-automatically. An expired session is rebuilt once and the call retried. Run
-`sfd reload` if org state still looks stale. Lifecycle commands replace an
+automatically. An expired session is rebuilt, and read-only calls are retried
+once. Read calls that hit a Salesforce request limit are retried up to twice with
+backoff. Writes, `apex` and `retrieve` are not retried after they start; the error
+says the change may or may not have applied. See
+[docs/safety.md](docs/safety.md#session-expiry) and
+[docs/request-limits.md](docs/request-limits.md). Run `sfd reload` if org state
+still looks stale. Lifecycle commands replace an
 older daemon before reporting it as running or reloading it; `stop` shuts
 it down even if its protocol differs.
 
 ## Behavior notes
 
-- Queries fetch every page unless `--limit` is given. Compact results preserve
+- Queries return at most 2,000 rows by default; `--no-limit` fetches every page,
+  and `--sf-json` is uncapped for compatibility. Compact results preserve
   `done` and any continuation URL supplied by Salesforce; see
   [docs/query.md](docs/query.md) for the limit rules.
 - Deploys, retrieves and `tracking` share one queue per daemon, so they run
   one at a time. Deploys reload `sfdx-project.json` on every call.
+- If the client stops waiting (Ctrl-C, or an agent's tool timeout) during a
+  `deploy`, `retrieve` or `test`, the daemon stops waiting and frees the queue.
+  The org job keeps running. The daemon log records its deploy, retrieve or test
+  run ID when known, so you can check it with `sf`. Source tracking is not updated
+  for that wait. See [docs/source-tracking.md](docs/source-tracking.md#serialization).
 - Retrieve conflicts, changes-only retrieves, and how `tracking` and deploys
   update source tracking are described in
   [docs/source-tracking.md](docs/source-tracking.md).
@@ -183,49 +206,6 @@ skips that setup. `logs --user` only filters the list. Setup needs Tooling API
 permission to manage TraceFlag and DebugLevel records. The TraceFlag rules,
 filtered output format and `test --logs` behavior are in
 [docs/debug-logs.md](docs/debug-logs.md).
-
-## Environment
-
-| Variable | Purpose |
-| --- | --- |
-| `SFD_TIMEOUT_SECONDS` | Positive request deadline in seconds, including connection time. Overrides defaults: 3 seconds for health/lifecycle requests; 120 seconds for other operations, extended to at least the deploy/retrieve/test `-w` wait plus 60 seconds (default waits: 33/33/60 minutes). Increase this for long queries or queued deploys. Timeout exits 3. |
-| `SFD_IDLE_MINUTES` | Idle timeout, default 60. |
-| `SFD_RUNTIME_DIR` | Socket, log and pid directory (on Windows, log and pid only; the pipe name is derived from it). |
-| `SFD_POLICY` | Safety policy file path, default `~/.config/sfd/policy.json`. See [Safety policy](docs/safety.md). |
-| `SFD_SF_ROOT` | `@salesforce/cli` install to load libraries from, instead of the `sf` on `PATH`. |
-| `SFD_HANDLERS_MODULE` | Test seam: stub handlers module used by the CLI tests. |
-| `SFD_HOOK_SHELL` | Force hook parsing and quoting to `posix` or `powershell`. Invalid values disable rewriting. Gemini defaults to PowerShell on Windows; Codex on native Windows requires an explicit override. |
-| `SFD_HOOK_DISABLE` | Set to `1` to make every agent hook return no opinion (no rewrite, no permission decision). `sfd hook check` reports `skip: SFD_HOOK_DISABLE=1`. |
-
-## Testing
-
-`npm test` covers project and org resolution, output formatting, the socket
-protocol (dispatch, version restart, drain, idle, stale socket), and the CLI
-end to end against stub handlers, and the agent hook adapters and `sf` rewrite
-rules. Injected Salesforce modules cover handler
-paging, auth refresh, deployment, retrieve, source tracking and test orchestration without an org.
-A real-org check is opt-in:
-
-```bash
-SFD_TEST_ORG=<alias> npm test
-```
-
-For local development, `npm run build` syntax-checks every source file and
-`npm test` runs the suite. sfd has no runtime or dev dependencies, so there is
-nothing to install; the Salesforce libraries come from your `sf` install.
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) and the
-[Code of Conduct](CODE_OF_CONDUCT.md).
-
-## Security
-
-See [SECURITY.md](SECURITY.md) for how to report vulnerabilities.
-
-## License
-
-[MIT](LICENSE) © Jacob Richter
 
 ## Agent integration
 
@@ -291,13 +271,63 @@ runs; other instructions are preserved. This command needs no org or daemon.
 The block's contents and marker rules are described in
 [docs/agents-snippet.md](docs/agents-snippet.md).
 
-For automatic command rewriting, install a hook with
-`sfd hook install --agent <agent>` (see [Agent integration](#agent-integration)).
-
-### Plugin command tables
+## Plugin command tables
 
 Plugins with an `sfd.cli` table expose direct commands, help, agent tips and
 strict `sf` hook rewrites, such as `sfd echo say --text hi`. Authors can run
 `sfd plugin init [root] [--ops <id,…>] [--write]` to draft a table from their
 operations and oclif manifest. Review its stderr notes before committing it.
 See [plugins](docs/plugins.md) and the [CLI contract](docs/plugin-api.md#cli-table).
+
+## Environment
+
+| Variable | Purpose |
+| --- | --- |
+| `SFD_TIMEOUT_SECONDS` | Positive request deadline in seconds, including connection time. Overrides defaults: 3 seconds for health/lifecycle requests; 120 seconds for other operations, extended to at least the deploy/retrieve/test `-w` wait plus 60 seconds (default waits: 33/33/60 minutes). Increase this for long queries or queued deploys. Timeout exits 3. |
+| `SFD_IDLE_MINUTES` | Idle timeout, default 60. |
+| `SFD_RUNTIME_DIR` | Socket, log and pid directory (on Windows, log and pid only; the pipe name is derived from it). |
+| `SFD_MAX_REQUEST_BYTES` | Largest request line the daemon accepts, in bytes; default 8 MiB. Larger requests get `BadRequest`. Mainly for tests. |
+| `SFD_POLICY` | Safety policy file path, default `~/.config/sfd/policy.json`. See [Safety policy](docs/safety.md). |
+| `SFD_SF_ROOT` | `@salesforce/cli` install to load libraries from, instead of the `sf` on `PATH`. |
+| `SFD_HANDLERS_MODULE` | Test seam: stub handlers module used by the CLI tests. |
+| `SFD_HOOK_SHELL` | Force hook parsing and quoting to `posix` or `powershell`. Invalid values disable rewriting. Gemini defaults to PowerShell on Windows; Codex on native Windows requires an explicit override. |
+| `SFD_HOOK_DISABLE` | Set to `1` to make every agent hook return no opinion (no rewrite, no permission decision). `sfd hook check` reports `skip: SFD_HOOK_DISABLE=1`. |
+| `SFD_PLUGIN_PATHS` | Extra plugin roots, separated by the platform path separator. See [plugins](docs/plugins.md). |
+| `SFD_PLUGIN_PATHS_ONLY` | Set to `1` to ignore the sf plugin registry and use only the `SFD_PLUGIN_PATHS` roots. |
+| `SFD_PLUGIN_IDLE_MINUTES` | Idle lifetime of a plugin worker in minutes, default 30. |
+| `SF_DATA_DIR` | Overrides the sf data directory that the plugin registry is read from. |
+
+## Testing
+
+`npm test` covers project and org resolution, output formatting, the socket
+protocol (dispatch, malformed requests, version restart, drain, idle, stale
+socket, size cap, read deadline, serialization errors), the signal drain, and the
+CLI end to end against stub handlers, and the agent hook adapters and `sf` rewrite
+rules. Injected Salesforce modules cover handler
+paging, auth refresh, deployment, retrieve, source tracking and test orchestration without an org.
+A real-org check is opt-in:
+
+```bash
+SFD_TEST_ORG=<alias> npm test
+```
+
+For local development, `npm run build` syntax-checks every source file,
+`npm run typecheck` runs the four TypeScript configs, and `npm test` runs the
+suite. sfd has no runtime dependencies. Its dev dependencies (TypeScript and
+`@types/node`) are only used for type checking. The Salesforce libraries come
+from your `sf` install.
+`npm run test:soak` runs the cache-bounds soak case with `--expose-gc`, which
+also checks heap growth; see [docs/auth-cache.md](docs/auth-cache.md#testing-and-soak).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report vulnerabilities.
+
+## License
+
+[MIT](LICENSE) © Jacob Richter

@@ -102,7 +102,7 @@ process.on("message", async message => {
   const msg = /** @type {any} */ (message);
   try {
     if (msg.t === "shutdown") process.exit(0);
-    if (msg.t === "auth-changed") { connections.clear(); return; }
+    if (msg.t === "auth-changed") { if (msg.username) connections.delete(msg.username); else connections.clear(); return; }
     if (msg.t === "abort") { calls.get(msg.id)?.abort(); approvals.get(msg.id)?.reject(new Error("Operation aborted")); return; }
     if (msg.t === "approve") { approvals.get(msg.id)?.resolve(); return; }
     if (msg.t === "reject-plan") { approvals.get(msg.id)?.reject(Object.assign(new Error("Host rejected plan"), { code: "plan-exceeds-effects" })); return; }
@@ -112,7 +112,7 @@ process.on("message", async message => {
         operations: problems.length ? [] : mod.operations.map((/** @type {import("../../packages/sfd-plugin/index.js").Operation} */ op) => {
           const { optionsSchema, ...descriptor } = op.descriptor;
           const shape = /** @type {any} */ (optionsSchema).shape;
-          return { ...descriptor, kind: op.kind, jsonSchema: null,
+          return { ...descriptor, kind: op.kind, jsonSchema: /** @type {unknown} */ (null),
             optionKeys: shape ? Object.keys(shape) : undefined };
         }) });
     }

@@ -2,11 +2,17 @@ import { relative, resolve } from "node:path";
 
 // Compact, token-friendly renderings of Salesforce results.
 
+/** @type {(x: any) => any[]} */
 export const asArray = x => (x === undefined || x === null ? [] : Array.isArray(x) ? x : [x]);
 
+/**
+ * @param {any} value
+ * @returns {any}
+ */
 export function stripAttributes(value) {
   if (Array.isArray(value)) return value.map(stripAttributes);
   if (value === null || typeof value !== "object") return value;
+  /** @type {Record<string, any>} */
   const out = {};
   for (const [key, inner] of Object.entries(value)) {
     if (key !== "attributes") out[key] = stripAttributes(inner);
@@ -14,11 +20,18 @@ export function stripAttributes(value) {
   return out;
 }
 
+/** @param {any} result */
 export function compactQuery(result) {
   return { totalSize: result.totalSize, done: result.done, ...(result.nextRecordsUrl ? { nextRecordsUrl: result.nextRecordsUrl } : {}), records: stripAttributes(result.records ?? []) };
 }
 
+/**
+ * @param {Record<string, any>} record
+ * @param {string} [prefix]
+ * @returns {Record<string, any>}
+ */
 export function flattenRecord(record, prefix = "") {
+  /** @type {Record<string, any>} */
   const out = {};
   for (const [key, value] of Object.entries(record)) {
     if (key === "attributes") continue;
@@ -30,40 +43,49 @@ export function flattenRecord(record, prefix = "") {
   return out;
 }
 
+/** @param {any[]} records */
 export function toCsv(records) {
   if (!records.length) return "";
   const rows = records.map(record => flattenRecord(record));
   const keys = [...new Set(rows.flatMap(row => Object.keys(row)))];
   // A null parent supplies empty cells for its dotted columns, not an extra column.
   const columns = keys.filter(key => !keys.some(other => other.startsWith(key + ".")) || rows.some(row => row[key] != null));
-  const escape = value => {
+  const escape = (/** @type {unknown} */ value) => {
     const text = value == null ? "" : String(value);
     return /[",\r\n]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text;
   };
   return [columns.map(escape).join(","), ...rows.map(row => columns.map(key => escape(row[key])).join(","))].join("\n");
 }
 
+/** @param {any} d */
 export function compactDescribe(d) {
   return {
     name: d.name, label: d.label, keyPrefix: d.keyPrefix, custom: d.custom,
     createable: d.createable, updateable: d.updateable, deletable: d.deletable,
-    fields: d.fields.map(f => {
+    fields: d.fields.map((/** @type {any} */ f) => {
+      /** @type {Record<string, any>} */
       const field = { name: f.name, type: f.type, label: f.label };
       if (f.length) field.length = f.length;
       if (f.referenceTo?.length) field.referenceTo = f.referenceTo;
-      if (f.picklistValues?.length) field.picklistValues = f.picklistValues.filter(p => p.active).map(p => p.value);
+      if (f.picklistValues?.length) field.picklistValues = f.picklistValues.filter((/** @type {any} */ p) => p.active).map((/** @type {any} */ p) => p.value);
       if (!f.nillable && f.createable && !f.defaultedOnCreate) field.required = true;
       if (!f.updateable) field.readOnly = true;
       if (f.calculated) field.formula = true;
       return field;
     }),
-    childRelationships: d.childRelationships.filter(c => c.relationshipName).map(c => `${c.relationshipName} (${c.childSObject}.${c.field})`)
+    childRelationships: d.childRelationships.filter((/** @type {any} */ c) => c.relationshipName).map((/** @type {any} */ c) => `${c.relationshipName} (${c.childSObject}.${c.field})`)
   };
 }
 
+/** @param {any} d */
 const loc = d => (d.lineNumber ? ` [${d.lineNumber}:${d.columnNumber ?? ""}]` : "");
 
+/**
+ * @param {any} result
+ * @param {{ fullLog?: boolean }} [options]
+ */
 export function formatApex(result, { fullLog = false } = {}) {
+  /** @type {string[]} */
   const lines = [];
   if (!result.compiled) {
     lines.push("COMPILE ERROR");
@@ -87,7 +109,13 @@ export function formatApex(result, { fullLog = false } = {}) {
 }
 
 // Anonymous Apex retains its original two-event rendering.
+/**
+ * @param {string} text
+ * @param {{ apexOnly?: boolean }} [options]
+ * @returns {string[]}
+ */
 export function filterLog(text, { apexOnly = false } = {}) {
+  /** @type {string[]} */
   const lines = [];
   let inLimits = false;
   for (const line of text.split(/\r?\n/)) {
@@ -121,16 +149,23 @@ export function filterLog(text, { apexOnly = false } = {}) {
   return deduped;
 }
 
+/** @param {any} bytes */
 const logSize = bytes => bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes ?? 0} B`;
 
+/** @param {any} log */
 export function formatLog(log) {
   return [`${log.operation} ${log.status} ${log.duration ?? 0}ms ${logSize(log.length)}`, ...filterLog(log.body)].join("\n");
 }
 
+/** @param {any[]} rows */
 export function formatLogList(rows) {
   return rows.length ? rows.map(row => `${row.Id} ${row.StartTime.replace("T", " ").replace(/\.\d+Z$/, "")} ${row.Operation} ${row.Status} ${logSize(row.LogLength)} ${row.DurationMilliseconds}ms`).join("\n") : "No debug logs found.";
 }
 
+/**
+ * @param {any} summary
+ * @param {string} org
+ */
 export function formatDeploy(summary, org) {
   const action = summary.checkOnly ? "Validated" : "Deployed";
   const tests = summary.numberTestsTotal > 0
@@ -148,6 +183,7 @@ export function formatDeploy(summary, org) {
 }
 
 // Reduce an SDR DeployResult response to the fields formatDeploy and --json callers need.
+/** @param {any} response */
 export function summarizeDeploy(response) {
   const details = response.details ?? {};
   return {
@@ -172,6 +208,7 @@ export function summarizeDeploy(response) {
   };
 }
 
+/** @param {any} result */
 export function summarizeTests(result) {
   const s = result.summary;
   return {
@@ -183,11 +220,15 @@ export function summarizeTests(result) {
     })),
     setupFailures: asArray(result.setup).filter(s => s.message).map(s => ({ name: s.fullName, message: s.message, stackTrace: s.stackTrace })),
     coverage: result.codecoverage
-      ? result.codecoverage.map(c => ({ name: c.name, percentage: c.percentage, uncoveredLines: c.uncoveredLines }))
+      ? result.codecoverage.map((/** @type {any} */ c) => ({ name: c.name, percentage: c.percentage, uncoveredLines: c.uncoveredLines }))
       : undefined
   };
 }
 
+/**
+ * @param {any} summary
+ * @param {string} org
+ */
 export function formatTests(summary, org) {
   const parts = [`${summary.testsRan} ran`, `${summary.passing} passed`, `${summary.failing} failed`];
   if (summary.skipped) parts.push(`${summary.skipped} skipped`);
@@ -213,8 +254,14 @@ export function formatTests(summary, org) {
 }
 
 // Normalize both SDR file responses and STL change/status rows at the boundary.
+/**
+ * @param {any[]} changes
+ * @param {string} projectDir
+ * @param {string} [state]
+ * @returns {any[]}
+ */
 export function summarizeChanges(changes, projectDir, state) {
-  const files = changes.flatMap(c => (c.filenames?.length ? c.filenames : [c.filePath]).map(path => ({
+  const files = changes.flatMap(c => (c.filenames?.length ? c.filenames : [c.filePath]).map((/** @type {string | undefined} */ path) => ({
     state: state ?? c.state ?? (c.deleted ? "Deleted" : c.modified ? "Changed" : "Add"),
     type: c.type, fullName: c.fullName ?? c.name,
     path: path ? relative(projectDir, resolve(projectDir, path)) : undefined,
@@ -223,16 +270,24 @@ export function summarizeChanges(changes, projectDir, state) {
   return [...new Map(files.map(f => [JSON.stringify([f.state, f.type, f.fullName, f.path, f.problem]), f])).values()];
 }
 
+/**
+ * @param {any} result
+ * @param {string} projectDir
+ */
 export function summarizeRetrieve(result, projectDir) {
   const response = result.response;
   const files = summarizeChanges(result.getFileResponses(), projectDir);
   return {
     success: Boolean(response.success) && !files.some(f => f.state === "Failed" || f.problem),
     status: response.status, id: response.id, files,
-    warnings: asArray(response.messages), conflicts: [], errorMessage: response.errorMessage
+    warnings: asArray(response.messages), conflicts: /** @type {any[]} */ ([]), errorMessage: response.errorMessage
   };
 }
 
+/**
+ * @param {any[]} files
+ * @param {boolean} [conflict]
+ */
 function componentLines(files, conflict = false) {
   // Collapse only a source file's companion XML; retain bundle files and all failures.
   const paths = new Set(files.filter(f => !f.problem).map(f => `${f.type}:${f.fullName}:${f.path}`));
@@ -245,8 +300,13 @@ function componentLines(files, conflict = false) {
   });
 }
 
+/**
+ * @param {any} summary
+ * @param {string} org
+ * @param {string} id
+ */
 function retrieveFailureHead(summary, org, id) {
-  const failed = summary.files.filter(f => f.problem || String(f.state).toLowerCase() === "failed").length;
+  const failed = summary.files.filter((/** @type {any} */ f) => f.problem || String(f.state).toLowerCase() === "failed").length;
   const retrieved = summary.files.length - failed;
   // The server can report Succeeded while individual components fail; say so instead of "FAILED (Succeeded)".
   if (failed && retrieved) return `PARTIAL: retrieved ${retrieved} files from ${org}${id}; ${failed} failed`;
@@ -254,8 +314,12 @@ function retrieveFailureHead(summary, org, id) {
   return `FAILED${status} ${org}${id}`;
 }
 
+/**
+ * @param {any} summary
+ * @param {string} org
+ */
 export function formatRetrieve(summary, org) {
-  const count = new Set(summary.conflicts.map(c => `${c.type}:${c.fullName}`)).size;
+  const count = new Set(summary.conflicts.map((/** @type {any} */ c) => `${c.type}:${c.fullName}`)).size;
   const id = summary.id ? ` (${summary.id})` : "";
   const head = count
     ? `CONFLICTS: ${count} component${count === 1 ? "" : "s"} changed both locally and in ${org}; rerun with --ignore-conflicts to overwrite`
@@ -268,7 +332,9 @@ export function formatRetrieve(summary, org) {
   return lines.join("\n");
 }
 
+/** @param {any} summary */
 export function formatTracking(summary) {
+  /** @type {string[]} */
   const lines = [];
   for (const section of ["local", "remote", "conflicts"]) {
     if (summary[section].length) lines.push(section, ...componentLines(summary[section], section === "conflicts"));
@@ -276,6 +342,7 @@ export function formatTracking(summary) {
   return lines.join("\n") || "No changes.";
 }
 
+/** @param {{ orgs: any[], hiddenExpired?: number }} list */
 export function formatOrgList({ orgs, hiddenExpired = 0 }) {
   const aliasWidth = Math.max(1, ...orgs.map(org => (org.alias ?? "-").length));
   const userWidth = Math.max(1, ...orgs.map(org => org.username.length));
@@ -289,6 +356,7 @@ export function formatOrgList({ orgs, hiddenExpired = 0 }) {
   return lines.join("\n");
 }
 
+/** @param {{ types: any[], apiVersion: string }} result */
 export function formatMetadataTypes({ types, apiVersion }) {
   return [`${types.length} metadata types (API v${apiVersion})`, ...types.map(type => {
     const children = type.children.slice(0, 6);
@@ -297,14 +365,18 @@ export function formatMetadataTypes({ types, apiVersion }) {
   })].join("\n");
 }
 
+/**
+ * @param {{ groups: any[] }} result
+ * @param {{ details?: boolean }} [options]
+ */
 export function formatMetadataList({ groups }, { details = false } = {}) {
   return groups.map(group => {
     const header = group.folders
       ? `${group.folderType} (${group.members.length}): use --folder <name> to list members`
       : groups.length > 1 ? `${group.type} (${group.members.length}):` : "";
-    const lines = group.members.map(member => details ? [member.fullName, member.lastModifiedDate?.slice(0, 10),
+    const lines = group.members.map((/** @type {any} */ member) => details ? [member.fullName, member.lastModifiedDate?.slice(0, 10),
       member.lastModifiedByName, member.namespacePrefix ? `ns:${member.namespacePrefix}` : "", member.manageableState].filter(Boolean).join("  ") : member.fullName);
     if (!lines.length) lines.push("(none)");
-    return header ? [header, ...lines.map(line => `  ${line}`)].join("\n") : lines.join("\n");
+    return header ? [header, ...lines.map((/** @type {string} */ line) => `  ${line}`)].join("\n") : lines.join("\n");
   }).join("\n");
 }

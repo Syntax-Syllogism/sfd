@@ -1,6 +1,10 @@
 import { join } from "node:path";
 import { files, lines, matches, complete, candidate, count } from "./shared.mjs";
 
+/**
+ * @param {import("./shared.mjs").ReadOptions} options
+ * @returns {AsyncGenerator<import("./shared.mjs").ShellRecord>}
+ */
 export async function* read(options) {
   const { home, since = new Date(0), stats } = options;
   for await (const file of files(join(home, ".claude/projects"), ".jsonl", since, stats)) {

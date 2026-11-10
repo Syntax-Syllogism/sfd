@@ -97,6 +97,9 @@ daemon handshake value, not the printed version.
   [agents-snippet.md](agents-snippet.md)). Set `targetOrg: false` if it takes no
   org, and `json: false` if it has no JSON output. `test/cli.test.mjs` then
   checks its `--help` output.
+- A new built-in operation in `src/ops/<name>.mjs` needs a JSDoc type on its parameters and
+  an `*Args` interface in `src/types.d.ts`, because `npm run typecheck` checks
+  `src/` under `noImplicitAny`.
 - A new two-word command also needs its name in the `["logs get", "org list"]`
   list in `bin/sfd.mjs`. Without it, `sfd <a> <b> --help` shows the first word's
   help.

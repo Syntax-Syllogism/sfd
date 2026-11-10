@@ -3,7 +3,9 @@ import { COMMANDS } from "./commands.mjs";
 const START = "<!-- sfd:start -->";
 const END = "<!-- sfd:end -->";
 
+/** @param {{ plugins: any[] }} [table] */
 export function snippet(table) {
+  /** @type {string[]} */
   const lines = [];
   let previousGroup;
   for (const { name, args, summary, agentTip, agentGroup } of COMMANDS.filter(command => command.name !== "help")) {
@@ -39,6 +41,10 @@ export function snippet(table) {
   ].join("\n");
 }
 
+/**
+ * @param {string} text
+ * @param {string} block
+ */
 export function upsertSnippet(text, block) {
   const start = text.indexOf(START);
   const end = text.indexOf(END);

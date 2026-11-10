@@ -1,14 +1,28 @@
 // Locate shell boundaries without interpreting words outside candidate sf calls.
+/** @typedef {{ start: number, end: number }} ShellElement */
+/** @typedef {{ start: number, end: number, elements: ShellElement[] }} ShellSegment */
+
+/**
+ * @param {string} source
+ * @returns {{ segments: ShellSegment[], skip?: undefined } | { skip: string, segments?: undefined }}
+ */
 export function split(source) {
+  /** @type {ShellSegment[]} */
   const segments = [];
-  let elements = [], start = 0, segmentStart = 0, i = 0;
-  let quote = '', stack = [], comment = false, pending = [];
-  const element = end => {
+  /** @type {ShellElement[]} */
+  let elements = [];
+  let start = 0, segmentStart = 0, i = 0;
+  /** @type {{ close: string, quote: string }[]} */
+  let stack = [];
+  /** @type {string[]} */
+  let pending = [];
+  let quote = '', comment = false;
+  const element = (/** @type {number} */ end) => {
     const text = source.slice(start, end).trimStart();
     if (/^(?:[({!]|\[\[|(?:if|for|while|until|case|select|function)\b|[\w]+\s*\(\s*\))/.test(text)) throw Error('compound shell command');
     elements.push({ start, end });
   };
-  const segment = end => {
+  const segment = (/** @type {number} */ end) => {
     element(end);
     segments.push({ start: segmentStart, end, elements });
     elements = [];

@@ -1,6 +1,6 @@
 {
   "name": "@syntax-syllogism/sfd",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Warm Salesforce CLI daemon: SOQL, anonymous Apex, REST, describe, deploy, and Apex tests without sf startup cost.",
   "type": "module",
   "bin": {
@@ -52,7 +52,8 @@
   "scripts": {
     "build": "node scripts/check-syntax.mjs",
     "test": "node --test test/*.test.mjs packages/sfd-plugin/test/*.test.mjs",
-    "typecheck": "tsc -p packages/sfd-plugin && tsc -p src/plugin"
+    "test:soak": "node --expose-gc --test --test-name-pattern='cache sizes remain bounded' test/org-session.test.mjs",
+    "typecheck": "tsc -p packages/sfd-plugin && tsc -p src/plugin && tsc -p src && tsc -p src/tsconfig.strict.json"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

@@ -1,3 +1,5 @@
+export const DEFAULT_QUERY_LIMIT = 2000;
+
 export const COMMANDS = [
   {
     name: "help",
@@ -10,7 +12,7 @@ export const COMMANDS = [
   {
     "name": "query",
     "args": "<soql>",
-    "summary": "Run SOQL (all pages). --tooling, --all (include deleted), --limit <n>, --csv. --sf-json for sf-compatible JSON",
+    "summary": `Run SOQL (first ${DEFAULT_QUERY_LIMIT.toLocaleString("en-US")} rows by default). --no-limit for all rows; --limit <n>, --tooling, --all, --csv. --sf-json for sf-compatible JSON`,
     "agentTip": "\"<soql>\" --csv --limit 200: SOQL; --tooling, --all",
     "docs": [{ "file": "query.md" }]
   },
@@ -211,6 +213,7 @@ export function commandHelp() {
   }).join("\n");
 }
 
+/** @param {string} name */
 export function commandUsage(name) {
   const command = COMMANDS.find(entry => entry.name === name);
   if (!command) return undefined;

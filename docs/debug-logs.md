@@ -5,13 +5,14 @@ description: "sfd logs, sfd logs get and sfd test --logs: listing and reading Ap
 
 `sfd logs`, `sfd logs get` and `sfd test --logs`: listing and reading Apex
 debug logs, the TraceFlag setup they trigger, and the filtered output format.
-Source: `src/handlers.mjs` (`logs`, `logGet`, the `test` handler, `ensureTrace`,
-`traceFor`, `afterTrace`, `logRows`, `logBody`), `src/format.mjs` (`filterLog`,
+Source: `src/ops/logs.mjs`, `src/ops/log-get.mjs`, `src/ops/test.mjs`,
+`src/org-session.mjs` (`traceFor`), `src/sf-util.mjs` (`ensureTrace`,
+`afterTrace`, `logRows`, `logBody`), `src/format.mjs` (`filterLog`,
 `formatLog`, `formatLogList`, `formatTests`), `bin/sfd.mjs` (options and the
 stderr notice), `src/server.mjs` (returns `trace` with error responses) and
 `src/rewrite.mjs` (`apex list log`, `apex get log`). Tests:
-`test/handlers.test.mjs`, `test/format.test.mjs`, `test/cli.test.mjs`,
-`test/rewrite.test.mjs`. `test/org.test.mjs` has an opt-in check of `logs` and
+`test/ops-test-logs.test.mjs`, `test/org-session.test.mjs` (trace cache),
+`test/format.test.mjs`, `test/cli.test.mjs`, `test/rewrite.test.mjs`. `test/org.test.mjs` has an opt-in check of `logs` and
 `logs get latest` against a real org (`SFD_TEST_ORG=<alias> npm test`).
 
 ## Commands
@@ -57,14 +58,14 @@ carries the notice (`trace` in the daemon response).
 
 ### Serialization and caching
 
-- TraceFlag setup runs in its own queue (`traceQueue` in `src/handlers.mjs`),
+- TraceFlag setup runs in its own queue (`traceQueue` in `src/org-session.mjs`),
   separate from the deploy/retrieve/tracking queue. Concurrent calls therefore
   create at most one flag.
 - A successful check is cached in daemon memory per org alias, with the user id
   and expiry. Later calls skip the query while the cached expiry is more than five
   minutes away.
-- The cache is cleared by an auth refresh, by a retried session error for that
-  alias, and by `sfd reload`.
+- The cache is cleared by an auth refresh, by a session error for that alias
+  (whether or not the call is retried), and by `sfd reload`.
 
 ## Filtered output
 
@@ -139,8 +140,9 @@ of up to five minutes in either direction; larger differences can still omit log
 ## Changing this area
 
 - Keep the TraceFlag rules above in sync with `ensureTrace` and `traceFor`.
-  `test/handlers.test.mjs` covers creation, extension, active flags, concurrent
-  setup, caching and notices after errors.
+  `test/ops-test-logs.test.mjs` covers creation, extension, active flags and
+  notices after errors; `test/org-session.test.mjs` covers concurrent setup and
+  caching.
 - Filter changes belong in `filterLog` in `src/format.mjs`. Add cases to
   `test/format.test.mjs`, and update the example above if the output changes.
 - The agent hook maps `apex list log` and `apex get log`. Keep their rows in the

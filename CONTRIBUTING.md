@@ -9,13 +9,16 @@ Thank you for your interest in contributing to sfd! This is a hobbyist project, 
 1. **Submit Pull Requests:**
    - Fork the repository.
    - Create a new branch for your feature or fix.
-   - Write clear, documented code.
-   - Ensure tests pass (`npm test`).
+   - Write clear, documented code. Read [AGENTS.md](AGENTS.md) for the repository conventions.
+   - Make sure `npm run build`, `npm run typecheck` and `npm test` pass.
    - Open a Pull Request with a description of your changes.
 
 ## Development Setup
 
-See the [README](README.md) for instructions on how to set up the project locally.
+sfd is plain Node.js ESM and needs Node 22 or newer. Clone the repository and run
+`npm test`. Most tests use stub or injected Salesforce modules and need no org or
+Salesforce CLI login. The real-org check is opt-in: `SFD_TEST_ORG=<alias> npm test`.
+The [README's Testing section](README.md#testing) lists what each part covers.
 
 ## Code of Conduct
 

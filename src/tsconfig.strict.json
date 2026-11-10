@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "strictNullChecks": true
+  },
+  "include": [
+    "./server.mjs",
+    "./client.mjs",
+    "./paths.mjs",
+    "./policy.mjs",
+    "./types.d.ts"
+  ]
+}

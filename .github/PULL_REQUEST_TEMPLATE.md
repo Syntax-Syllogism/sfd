@@ -17,8 +17,8 @@ Please delete options that are not relevant.
 
 Please describe the tests that you ran to verify your changes. Provide instructions so we can reproduce.
 
-- [ ] Test A
-- [ ] Test B
+- [ ] `npm run build`, `npm run typecheck` and `npm test` pass
+- [ ] Real-org tests were run with `SFD_TEST_ORG=<alias> npm test`, or are not needed for this change
 
 ## Checklist
 

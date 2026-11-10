@@ -1,0 +1,32 @@
+{
+  "compilerOptions": {
+    "target": "es2023",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "allowJs": true,
+    "checkJs": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": [
+      "node"
+    ],
+    "strict": false,
+    "noImplicitAny": true,
+    "paths": {
+      "zod": [
+        "../packages/sfd-plugin/test/stubs/zod.d.ts"
+      ],
+      "@salesforce/core": [
+        "../packages/sfd-plugin/test/stubs/salesforce-core.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "./**/*.mjs",
+    "./types.d.ts",
+    "../bin/**/*.mjs"
+  ],
+  "exclude": [
+    "./plugin/**"
+  ]
+}

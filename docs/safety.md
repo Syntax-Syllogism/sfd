@@ -5,14 +5,26 @@ description: "sfd gates built-in commands and plugin operations by declared effe
 
 sfd gates built-in commands and plugin operations by declared effects and target org type.
 
+Source: `src/policy.mjs` (`checkPolicy`, `decide`, `builtinEffects`, `DEFAULT_POLICY`,
+the policy loader), `src/ops/effects.mjs` (`EFFECTS`, the declared effects of each
+built-in), `src/handlers.mjs` (`policyGate`, and the wrapper that runs it before the
+project queue), `src/ops/org-list.mjs` (its own check), `src/hooks.mjs`
+(`CONFIRM_DENY_RULES` and the `ask` decisions), and the plugin effects ceiling in
+`src/plugin/handler.mjs` and `src/plugin/supervisor.mjs`. Tests:
+`test/policy.test.mjs`, `test/ops-registry.test.mjs` and `test/hooks.test.mjs`.
+
 ## Effects and defaults
 
 | Effect | Built-in commands | Scratch | Sandbox | Production / unknown |
 | --- | --- | --- | --- | --- |
-| `read` | query, describe, metadata lists, logs, org, tracking, test | allow | allow | allow |
+| `read` | query, describe, metadata lists, logs, org, org list, tracking, test | allow | allow | allow |
 | `local-write` | retrieve | allow | allow | allow |
 | `org-write` | deploy, apex, REST POST/PATCH/PUT | allow | allow | ask |
 | `destructive` | REST DELETE | allow | ask | ask |
+
+`ping`, `status` and `reload` are daemon commands that never reach an org, so they
+skip the generic gate. `org list` applies its own check, against the most restricted
+org it lists.
 
 REST GET/HEAD are reads; other methods conservatively count as org writes.
 Deploy includes `--check-only`: this preview can run tests and still uses the
@@ -27,6 +39,33 @@ ceiling; the host rejects effects outside it before apply. The strictest policy
 decision wins: `deny`, then `ask`, then `allow`. Read operations also honor custom
 read restrictions.
 
+## Session expiry
+
+When Salesforce reports `INVALID_SESSION_ID` or `INVALID_AUTH_HEADER`, sfd drops
+the affected username's cached connections, traces and metadata-type state.
+Cached org types are preserved. The invalidation rules are in
+[auth-cache.md](auth-cache.md). Whether the failed call is retried depends on the
+operation:
+
+- Retry-safe built-ins are retried once on a fresh connection, even if the call
+  had already started: `query`, `describe`, `org`, `list-metadata-types`,
+  `list-metadata`, `tracking`, `logs`, `logs get`, `test`, and REST GET/HEAD.
+- `deploy`, `retrieve`, `apex`, and REST POST/PATCH/PUT/DELETE are retried only if
+  the session failed before the call started (for example, while connecting).
+  Once started, the error is `SessionExpired` and is not retried. A deploy may or
+  may not have applied, so check the org (the deploy ID when one is known) before
+  running it again. A retrieve may or may not have changed local files, and
+  re-running it is safe.
+- Plugin operations follow their `retry` descriptor. A failure during connection
+  creation is retried for any operation; see [plugins](plugins.md#lifecycle-and-auth).
+
+## Request limits
+
+Read calls retry `REQUEST_LIMIT_EXCEEDED`, `ConcurrentPerOrgLongTxn`, and
+`ExceededQuota` up to twice. Writes and Apex test execution are never retried for
+these errors. The backoff, the bounded fan-out and the API usage reporting are in
+[Request limits](request-limits.md).
+
 ## Org types
 
 Scratch orgs have an auth `expirationDate` or `devHubUsername`. Otherwise sfd
@@ -35,9 +74,12 @@ queries `Organization` for `IsSandbox`, `OrganizationType` and
 Developer Edition, trial orgs and Dev Hubs count as production. Failed detection
 is `unknown`, which uses production rules.
 
-Detection is cached by username, cleared on auth changes, session invalidation
-and `sfd reload`. The daemon atomically writes a token-free `org-types.json` in
-its runtime directory for hooks. `sfd org --json` includes a top-level `type`.
+Detection is cached by username. It is cleared on auth changes and `sfd reload`
+(global invalidation), and kept on a session error for one org. The daemon
+atomically writes a token-free `org-types.json` in its runtime directory for hooks. It rewrites the file only when the serialized
+content changes. A failed write is logged and does not fail the request, so hooks
+may read a stale file until the next successful write. `sfd org --json` includes a
+top-level `type`.
 `org list --json` keeps its existing display `type` and adds `safetyType`:
 scratch when known locally, otherwise the cached safety type or unknown. Listing
 orgs does not introduce a network lookup for safety classification.

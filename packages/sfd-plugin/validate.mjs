@@ -1,10 +1,14 @@
 export const API_VERSIONS = Object.freeze([0]);
 export const EFFECTS = Object.freeze(["read", "local-write", "org-write", "destructive"]);
+/** @param {any} value */
 const isObject = value => value !== null && typeof value === "object" && !Array.isArray(value);
+/** @param {any} value */
 const nonempty = value => typeof value === "string" && value.trim().length > 0;
+/** @param {any} value */
 const relativePath = value => typeof value === "string" && value.startsWith("./") &&
   value.length > 2 && !value.includes("\\") && !value.includes("\0") && !value.split("/").includes("..");
 
+/** @param {any} manifest */
 export function validateManifest(manifest) {
   if (!isObject(manifest)) return ["manifest must be an object"];
   const problems = [];
@@ -23,6 +27,7 @@ export function validateManifest(manifest) {
   return problems;
 }
 
+/** @param {any} mod */
 export function validateOperationModule(mod) {
   if (isObject(mod) && "default" in mod) mod = mod.default;
   if (!isObject(mod)) return ["module must be an object"];
@@ -35,7 +40,7 @@ export function validateOperationModule(mod) {
   const ids = new Set();
   for (const [index, op] of mod.operations.entries()) {
     const id = isObject(op?.descriptor) && typeof op.descriptor.id === "string" ? op.descriptor.id : `operations[${index}]`;
-    const report = message => problems.push(`${id}: ${message}`);
+    const report = (/** @type {string} */ message) => problems.push(`${id}: ${message}`);
     if (!isObject(op)) { report("operation must be an object"); continue; }
     if (!["read", "write"].includes(op.kind)) report("kind must be read or write");
     for (const method of op.kind === "read" ? ["run"] : op.kind === "write" ? ["plan", "apply"] : []) {
@@ -52,8 +57,8 @@ export function validateOperationModule(mod) {
     else {
       for (const effect of d.effects) if (!EFFECTS.includes(effect)) report(`descriptor.effects contains unknown effect ${typeof effect === "string" ? JSON.stringify(effect) : String(effect)}`);
       if (new Set(d.effects).size !== d.effects.length) report("descriptor.effects contains duplicates");
-      if (op.kind === "read" && d.effects.some(e => !["read", "local-write"].includes(e))) report("descriptor.effects for a read may only contain read and local-write");
-      if (op.kind === "write" && !d.effects.some(e => ["org-write", "destructive"].includes(e))) report("descriptor.effects for a write must include org-write or destructive");
+      if (op.kind === "read" && d.effects.some((/** @type {any} */ e) => !["read", "local-write"].includes(e))) report("descriptor.effects for a read may only contain read and local-write");
+      if (op.kind === "write" && !d.effects.some((/** @type {any} */ e) => ["org-write", "destructive"].includes(e))) report("descriptor.effects for a write must include org-write or destructive");
     }
     if (!["required", "optional", "none"].includes(d.requiresOrg)) report("descriptor.requiresOrg must be required, optional or none");
     if (typeof d.requiresProject !== "boolean") report("descriptor.requiresProject must be a boolean");
@@ -66,6 +71,10 @@ export function validateOperationModule(mod) {
   return problems;
 }
 
+/**
+ * @param {readonly string[]} ceiling
+ * @param {unknown} planEffects
+ */
 export function effectsExceeding(ceiling, planEffects) {
   if (planEffects === undefined) return [];
   if (!Array.isArray(planEffects)) throw new TypeError("plan.effects must be an array");
@@ -73,6 +82,10 @@ export function effectsExceeding(ceiling, planEffects) {
 }
 
 // Operations are optional for static consumers such as the rewrite hook.
+/**
+ * @param {any} table
+ * @param {any[]} [operations]
+ */
 export function validateCliTable(table, operations) {
   if (!isObject(table)) return ["CLI table must be an object"];
   const problems = [];
@@ -82,8 +95,8 @@ export function validateCliTable(table, operations) {
   const names = new Set();
   for (const command of table.commands) {
     if (!isObject(command)) { problems.push("command must be an object"); continue; }
-    const report = message => problems.push(`${command.operation}: ${message}`);
-    const words = value => Array.isArray(value) && value.length > 0 && value.every(word => typeof word === "string" && /^[a-z][a-z0-9-]*$/.test(word));
+    const report = (/** @type {string} */ message) => problems.push(`${command.operation}: ${message}`);
+    const words = (/** @type {any} */ value) => Array.isArray(value) && value.length > 0 && value.every(word => typeof word === "string" && /^[a-z][a-z0-9-]*$/.test(word));
     if (typeof command.operation !== "string" || !/^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/.test(command.operation)) report("invalid operation id");
     if (!words(command.name) || command.name[0] !== command.operation?.split?.(".")[0]) report("name must start with the operation namespace");
     const name = command.name?.join?.(" ");
@@ -112,6 +125,7 @@ export function validateCliTable(table, operations) {
       if (flag.name === "confirm") report("confirm is reserved by host and cannot be declared");
       if (["target-org", "api-version"].includes(flag.name) && flag.option !== undefined) report("reserved flag must omit option");
       if (flag.option !== undefined && (!nonempty(flag.option) || (shape && !Object.hasOwn(shape, flag.option)))) report(`unknown option key ${flag.option}`);
+      /** @type {Record<string, string>} */
       const host = { "target-org": "o", help: "h" };
       if (Object.hasOwn(host, flag.name) && flag.char !== undefined && flag.char !== host[flag.name]) report("host flag has conflicting char");
       if (["o", "h"].includes(flag.char) && host[flag.name] !== flag.char) report("flag char is reserved by host");

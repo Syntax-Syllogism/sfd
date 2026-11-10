@@ -107,9 +107,11 @@ Each plugin runs in a lazily forked process and resolves its own dependencies.
 The host resolves aliases with sf's core and passes username/API metadata to
 the worker. The worker creates and caches connections using the plugin's own
 `@salesforce/core`; auth tokens never cross IPC or get written by the host.
-Auth changes and reload clear worker connection caches. An expired session
-invalidates a connection; only safe operations (or failures during connection
-creation) are retried once. Unsafe operations are never replayed after starting.
+Auth changes and `sfd reload` clear every worker connection. A host session error
+clears only the affected username's connection. An expired session invalidates a
+connection; only safe operations (or failures during connection creation) are
+retried once. Unsafe operations are never replayed after starting. The host-side
+rules are in [auth-cache.md](auth-cache.md).
 
 Concurrent operations share a worker. Project-bound operations use the same
 host queue as built-in deploy and tracking operations. Workers receive the
@@ -117,7 +119,13 @@ caller's cwd and project root; they never change process cwd.
 
 Idle workers exit; daemon drain and termination stop all workers. A worker crash
 fails its in-flight calls with `worker-crashed`, and the next request respawns
-it. Requests recheck plugin versions and operations-file mtimes. A changed
+it. A worker stopped for a start timeout, a plugin change or idle exit leaves the
+pool before its child exits, so a stopping worker is never handed to a new
+request. A worker killed after an ignored cancellation also leaves the pool
+before it is killed. The daemon-side rules are in
+[daemon.md](daemon.md#plugin-worker-eviction).
+
+Requests recheck plugin versions and operations-file mtimes. A changed
 plugin restarts its worker and refreshes descriptors; the daemon stays warm.
 This replaces folding plugin versions into the client `PROTOCOL`: clients
 cannot cheaply know plugin mtimes. The protocol still includes recursive sfd

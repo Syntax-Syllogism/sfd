@@ -16,14 +16,15 @@ export async function initCliTable(root, { ops, write = false } = {}) {
   const invalid = validateOperationModule(mod).filter(p => !p.startsWith("warning: "));
   if (invalid.length) throw new Error(invalid.join("; "));
   const review = [];
+  /** @type {any} */
   let manifest;
   try { manifest = JSON.parse(readFileSync(join(root, "oclif.manifest.json"), "utf8")); }
   catch (error) {
     if (/** @type {any} */ (error).code !== "ENOENT") throw error;
     review.push("run your build to produce oclif.manifest.json");
   }
-  if (ops) for (const id of ops) if (!mod.operations.some(op => op.descriptor.id === id)) throw new Error(`Unknown operation: ${id}`);
-  const commands = mod.operations.filter(op => !ops || ops.includes(op.descriptor.id)).map(op => {
+  if (ops) for (const id of ops) if (!mod.operations.some((/** @type {any} */ op) => op.descriptor.id === id)) throw new Error(`Unknown operation: ${id}`);
+  const commands = mod.operations.filter((/** @type {any} */ op) => !ops || ops.includes(op.descriptor.id)).map((/** @type {any} */ op) => {
     const d = op.descriptor;
     const shape = d.optionsSchema.shape;
     const source = manifest?.commands?.[d.cliId]?.flags;

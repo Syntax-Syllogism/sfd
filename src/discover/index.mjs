@@ -18,6 +18,7 @@ const sfPaths = [
   "project retrieve start", "project deploy start", "sobject describe", "api request rest",
   "plugins"
 ];
+/** @type {Record<string, string[]>} */
 const commandPaths = {
   sf: sfPaths,
   sfdx: [...sfPaths, "force:org:list", "force:org:display", "force:data:soql:query",
@@ -25,6 +26,7 @@ const commandPaths = {
   sfd: COMMANDS.flatMap(({ name }) => name.split(" | "))
 };
 
+/** @param {string[]} words */
 function subcommandName([executable, ...args]) {
   if (!args.length || args[0].startsWith("-")) return "(no subcommand)";
   const matches = commandPaths[executable].filter(path =>
@@ -33,6 +35,10 @@ function subcommandName([executable, ...args]) {
     ?? "(unrecognized subcommand)";
 }
 
+/**
+ * @param {{ since?: string, agent?: string[], top?: string | number, project?: string }} values
+ * @param {number} [now]
+ */
 export function discoverOptions(values, now = Date.now()) {
   const window = values.since ?? "30d";
   if (!/^\d+[dh]$/.test(window)) throw new UsageError("--since must be a duration such as 30d or 12h.");
@@ -45,9 +51,14 @@ export function discoverOptions(values, now = Date.now()) {
   return { since, window, agents, top, project: values.project };
 }
 
+/**
+ * @param {string} command
+ * @returns {string[] | undefined}
+ */
 function invocation(command) {
   const parsed = split(command);
   if (!parsed.skip) {
+    /** @type {string[][]} */
     const found = [];
     for (const segment of parsed.segments) for (const element of segment.elements) {
       const text = command.slice(element.start, element.end);
@@ -67,6 +78,7 @@ function invocation(command) {
     const match = /^(?:\s*cd\s+\S+\s*&&)?\s*((?:\w+=\S+\s+)*)(sf|sfd|sfdx)\b(.*)/s.exec(command);
     return match ? [match[2], ...match[3].trim().split(/\s+/)] : undefined;
   }
+  /** @type {string[][]} */
   const found = [];
   let start = true;
   for (let i = 0; i < tokens.length; i++) {
@@ -84,6 +96,7 @@ function invocation(command) {
   return found.find(words => words[0] !== "sfd") ?? found[0];
 }
 
+/** @param {string} reason */
 function reportReason(reason) {
   if (reason.startsWith("unsupported result format ")) return "unsupported result format";
   const flagReason = /^(unsupported flag|duplicate flag|missing value for|unsupported value for|unsupported boolean value) (.*)$/s.exec(reason);
@@ -92,6 +105,7 @@ function reportReason(reason) {
   return `${flagReason[1]}${/^(?:--[A-Za-z][A-Za-z0-9-]*|-[A-Za-z])$/.test(flag) ? ` ${flag}` : ""}`;
 }
 
+/** @param {string} command */
 export function classify(command) {
   const words = invocation(command);
   if (!words) return;
@@ -104,18 +118,24 @@ export function classify(command) {
   return { classification: "skipped", subcommand, reason: reportReason(result.skip) };
 }
 
-const median = values => {
+const median = (/** @type {number[]} */ values) => {
   if (!values.length) return null;
   values.sort((a, b) => a - b);
   const mid = Math.floor(values.length / 2);
   return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
 };
-const ranked = map => [...map].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+const ranked = (/** @type {Map<string, number>} */ map) => [...map].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 
+/**
+ * @param {string} agent
+ * @param {object} options
+ * @returns {Promise<{ observations: any[], stats: Record<string, number> }>}
+ */
 function scanAgent(agent, options) {
   // Independent JSON parsers keep large agent histories off one CPU core.
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./worker.mjs", import.meta.url), { workerData: { agent, ...options } });
+    /** @type {any} */
     let result;
     worker.on("message", message => { result = message; });
     worker.on("error", reject);
@@ -126,7 +146,11 @@ function scanAgent(agent, options) {
   });
 }
 
+/**
+ * @param {{ home?: string, agents?: string[], since?: Date, window?: string, project?: string, top?: number }} [options]
+ */
 export async function discover({ home = homedir(), agents = Object.keys(readers), since = new Date(0), window = "all history", project, top = 10 } = {}) {
+  /** @type {Record<string, any>} */
   const report = {
     since: since.toISOString(), window, agents, project: project ?? null, top,
     sfCalls: 0, sessions: 0,
@@ -176,8 +200,9 @@ export async function discover({ home = homedir(), agents = Object.keys(readers)
   return report;
 }
 
+/** @param {Record<string, any>} report */
 export function formatReport(report) {
-  const list = items => items.slice(0, report.top).map(item => `${item.name} ${item.count}`).join(" · ") || "(none)";
+  const list = (/** @type {{ name: string, count: number }[]} */ items) => items.slice(0, report.top).map(item => `${item.name} ${item.count}`).join(" · ") || "(none)";
   const { counts: c, estimates: e, diagnostics: d } = report;
   const time = e.durationSamples ? `~${(e.timeSavedMs / 60000).toFixed(1)} min saved (${e.durationSamples} samples)` : "time unknown";
   const output = e.outputSamples ? `~${Math.round(e.outputTokens)} output tokens (${e.outputSamples} samples)` : "output unknown";

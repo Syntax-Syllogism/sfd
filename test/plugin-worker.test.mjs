@@ -222,3 +222,68 @@ test("safe auth retries discard failure reports from the failed attempt", async 
     assert.equal("failures" in result, false);
   }
 });
+
+
+test("a timed out worker is replaced before it exits", async t => {
+  const dir = mkdtempSync(resolve(tmpdir(), "sfd-timeout-worker-"));
+  const workerPath = resolve(dir, "worker.mjs");
+  const marker = resolve(dir, "started");
+  writeFileSync(workerPath, `
+    import { existsSync, writeFileSync } from "node:fs";
+    const first = !existsSync(${JSON.stringify(marker)});
+    writeFileSync(${JSON.stringify(marker)}, "started");
+    process.on("message", msg => {
+      if (msg.t === "describe" && !first) process.send({ t: "described", id: msg.id, operations: [], problems: [] });
+    });
+  `);
+  const { supervisor, root, env } = fixture(t, { workerPath, startTimeoutMs: 300 });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const plugin = discoverPlugins({ env: { ...env, SFD_PLUGIN_PATHS: root } })[0];
+  assert.equal((await supervisor.describe(plugin)).code, "worker-start-timeout");
+  assert.deepEqual((await supervisor.describe(plugin)).problems, []);
+});
+
+test("an abort-timed-out worker is evicted before it exits", { skip: process.platform === "win32" }, async t => {
+  const dir = mkdtempSync(resolve(tmpdir(), "sfd-abort-worker-"));
+  const workerPath = resolve(dir, "worker.mjs");
+  writeFileSync(workerPath, `
+    import { existsSync, writeFileSync } from "node:fs";
+    const marker = ${JSON.stringify(resolve(dir, "started"))};
+    const first = !existsSync(marker);
+    writeFileSync(marker, "started");
+    if (first) process.on("SIGTERM", () => {});
+    process.on("message", msg => {
+      if (msg.t === "describe") process.send({ t: "described", id: msg.id, operations: [], problems: [] });
+      if (msg.t === "shutdown" && !first) process.exit(0);
+    });
+  `);
+  const { supervisor, env } = fixture(t, { workerPath, abortTimeoutMs: 30 });
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const plugin = discoverPlugins({ env })[0];
+  await supervisor.describe(plugin);
+  const oldPid = (await supervisor.status())[0].pid;
+  t.after(() => { try { process.kill(oldPid, "SIGKILL"); } catch {} });
+  const controller = new AbortController();
+  const pending = supervisor.call(plugin, {}, { descriptor: {}, signal: controller.signal });
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort();
+  for (let i = 0; i < 100 && (await supervisor.status())[0].worker !== "stopped"; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal((await supervisor.status())[0].worker, "stopped");
+  process.kill(oldPid, 0);
+  await supervisor.describe(plugin);
+  assert.notEqual((await supervisor.status())[0].pid, oldPid);
+  process.kill(oldPid, "SIGKILL");
+  assert.equal((await pending).code, "worker-crashed");
+});
+
+
+test("worker stderr is logged with its plugin root", async t => {
+  const records = [];
+  const { call, root } = fixture(t, { log: (msg, fields) => records.push({ msg, ...fields }) });
+  const ops = resolve(root, "ops.mjs");
+  writeFileSync(ops, 'console.error("worker diagnostic secret-token Salesforce-record");\n' + readFileSync(ops, "utf8"));
+  await call("say");
+  for (let i = 0; i < 50 && !records.length; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(records.some(record => record.source === "plugin" && record.root === root && !Object.hasOwn(record, "line")), JSON.stringify(records));
+  assert.doesNotMatch(JSON.stringify(records), /secret-token|Salesforce-record/);
+});

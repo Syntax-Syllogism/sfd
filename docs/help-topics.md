@@ -45,18 +45,19 @@ from the file:
   `query-output`. A file whose base name matches a command name gets a `-guide`
   suffix, so `discover.md` is `discover-guide`. Both rules avoid collisions with
   commands.
-- **Title**: the first H1. A file without one throws.
-- **Description**: the first sentence of the first paragraph, with backticks
-  removed. Write that paragraph as a one-line summary, because it appears in the
-  index.
+- **Title**: the frontmatter `title`, or the first H1 when there is no
+  frontmatter title. A file with neither throws.
+- **Description**: the frontmatter `description`, or else the first sentence of
+  the first paragraph, with backticks removed. The description appears in the
+  index, so set a frontmatter `description` when that first sentence would not
+  read well there.
 
 Guides ship in the npm package (`docs` is in `files` in `package.json`), so each
 one must stand alone: no references to private tooling, notes or internal
 workflow.
 
 Relative links to other `.md` files are rewritten in guides and mapped command
-documentation. Each
-link becomes `` `<label>: sfd help <guide>` ``, or `` `<label>: sfd help -a` `` if
+documentation. Each link becomes `` `<label>: sfd help <guide>` ``, or `` `<label>: sfd help -a` `` if
 the target is not a guide. Fragments such as `#keeping-it-in-sync` are dropped,
 so the link goes to the whole guide. External `http(s)` links are left as they
 are.

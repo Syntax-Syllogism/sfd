@@ -5,12 +5,13 @@ description: "sfd query: the row limit, the CSV layout, the output mode for each
 
 `sfd query`: the row limit, the CSV layout, the output mode for each flag
 combination, the sf-compatible `--sf-json` envelope, and the truncation trailer.
-Source: `src/handlers.mjs` (the `query` handler and its paging loop),
+Source: `src/ops/query.mjs` (the `query` operation and its paging loop),
 `src/format.mjs` (`compactQuery`, `flattenRecord`, `toCsv`), `src/sf-json.mjs`
-(`sfJson.query`, `sfEnvelope`), and `bin/sfd.mjs` (`queryLimit`, the query case in
-`run`, and the trailer). Tests: `test/handlers.test.mjs` (limit paging and
-slicing), `test/format.test.mjs` (`toCsv`, `flattenRecord`), `test/cli.test.mjs`
-(stdout and stderr by mode, `--limit` validation) and `test/sf-json.test.mjs`.
+(`sfJson.query`, `sfEnvelope`), `src/commands.mjs` (`DEFAULT_QUERY_LIMIT`), and
+`bin/sfd.mjs` (`queryLimit`, the query case in `run`, and the trailer). Tests:
+`test/ops-query-apex.test.mjs` (limit paging and slicing), `test/format.test.mjs`
+(`toCsv`, `flattenRecord`), `test/cli.test.mjs` (stdout and stderr by mode,
+`--limit` and `--no-limit` validation) and `test/sf-json.test.mjs`.
 
 ```bash
 sfd query "SELECT Id, Name, Owner.Name FROM Account" --csv --limit 200
@@ -20,9 +21,10 @@ sfd query "SELECT Id FROM Account" --limit 50 --json
 
 ## Limits
 
-- Without `--limit`, every page is fetched and the output is the compact JSON
-  (`totalSize`, `done`, `nextRecordsUrl` when Salesforce supplies one, and
-  `records` with `attributes` stripped).
+- By default, at most 2,000 rows are returned. `--no-limit` fetches every page.
+  `--limit` and `--no-limit` cannot be combined (exit 2).
+- Output is compact JSON (`totalSize`, `done`, `nextRecordsUrl` when Salesforce
+  supplies one, and `records` with `attributes` stripped).
 - `--limit <n>` must be a positive safe integer. Anything else is a usage error
   (exit 2) with `--limit must be a positive integer.`
 - Paging stops once at least `n` records are fetched, and the records are then
@@ -69,9 +71,11 @@ truncated records and the `truncated` flag, and it prints no trailer.
 … 5,011 more rows not shown (totalSize 5,012); raise --limit or narrow the query
 ```
 
-The count is `totalSize` minus the rows returned, and numbers use en-US
-separators. In the default mode the line is written to stdout after the JSON.
-With `--csv` it goes to stderr so stdout stays valid CSV.
+For the implicit default, the hint says `use --no-limit for all rows, or narrow
+the query`. Truncation exits 0. The count is `totalSize` minus the rows
+returned, and numbers use en-US separators. In the default mode the line is
+written to stdout after the JSON. With `--csv` it goes to stderr so stdout stays
+valid CSV.
 
 ## Agent hook
 
@@ -82,19 +86,24 @@ The `human` and `json` result formats are accepted and dropped, as described in
 
 ## Changing this area
 
-- Keep the paging and truncation rules above in sync with the `query` handler
-  in `src/handlers.mjs`. The limit-stopping condition, the slicing, and the
+- Keep the paging and truncation rules above in sync with the `query` operation
+  in `src/ops/query.mjs`. The limit-stopping condition, the slicing, and the
   `truncated` flag all live there.
 - CSV changes belong in `toCsv` or `flattenRecord` in `src/format.mjs`. Add a
   case to `test/format.test.mjs` for each new rule.
 - The trailer and output-mode rules are in `run` in `bin/sfd.mjs`. Keep the
   stdout and stderr split as the table describes, and keep the README and
   `USAGE` flags in sync.
+- The default cap is `DEFAULT_QUERY_LIMIT` in `src/commands.mjs`, and the help
+  summary is built from it. The figure 2,000 is also written literally in
+  `README.md`, this file, and `docs/agent-hooks.md`, so update those when the
+  constant changes. `--sf-json` is never capped.
 
 ## sf-compatible JSON
 
 `--sf-json` requests raw records (including relationship `attributes`) and
 prints `{status: 0, result, warnings: []}`. A completed query omits
-`nextRecordsUrl`. It fetches every page, even beyond sf's configurable fetch
-cap. It cannot be combined with `--limit`, `--csv` or `--json`. Consumed
-`sf data query --json` calls use this mode through the rewrite hook.
+`nextRecordsUrl`. It bypasses the default row limit and fetches every page,
+even beyond sf's configurable fetch cap. It cannot be combined with `--limit`,
+`--csv` or `--json`. Consumed `sf data query --json` calls use this mode through
+the rewrite hook.

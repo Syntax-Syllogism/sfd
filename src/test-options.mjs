@@ -1,4 +1,8 @@
 // Shared by the CLI and rewrite hook so invalid sync selectors stay with sf.
+/**
+ * @param {{ classNames?: string[], tests?: string[], suiteNames?: unknown, testLevel?: string }} selection
+ * @returns {string | undefined}
+ */
 export function synchronousTestError({ classNames = [], tests = [], suiteNames, testLevel }) {
   if (suiteNames !== undefined) return "Synchronous test runs do not support suites.";
   if (testLevel !== undefined && testLevel !== "RunSpecifiedTests") {

@@ -11,8 +11,8 @@ export function createRegistry(supervisor) {
     const fingerprint = pluginFingerprint([plugin]);
     if (cache.get(plugin.root)?.fingerprint !== fingerprint) {
       const reply = await supervisor.describe(plugin);
-      if (reply.ok === false) return { operations: [], error: reply };
-      if (reply.problems?.length) return { operations: [], error: failure("invalid-plugin", reply.problems.join("; ")) };
+      if (reply.ok === false) return { operations: /** @type {any[]} */ ([]), error: reply };
+      if (reply.problems?.length) return { operations: /** @type {any[]} */ ([]), error: failure("invalid-plugin", reply.problems.join("; ")) };
       cache.set(plugin.root, { fingerprint, operations: reply.operations });
     }
     return { operations: cache.get(plugin.root)?.operations ?? [] };
@@ -29,6 +29,7 @@ export function createRegistry(supervisor) {
       }
       const prefix = id.split(".")[0];
       const preferred = plugins.find(p => p.name.split("/").at(-1)?.replace(/-plugin$/, "").replace(/^sfd-plugin-/, "") === prefix);
+      /** @type {any[]} */
       const names = [];
       // Describe the likely owner first. Earlier candidates still need checking to
       // make duplicate IDs deterministic, independent of the order of requests.

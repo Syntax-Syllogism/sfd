@@ -2,6 +2,10 @@ import { readFile } from "node:fs/promises";
 import { join, basename, dirname } from "node:path";
 import { files, lines, matches, candidate, count, outputChars, elapsed } from "./shared.mjs";
 
+/**
+ * @param {import("./shared.mjs").ReadOptions} options
+ * @returns {AsyncGenerator<import("./shared.mjs").ShellRecord>}
+ */
 export async function* read(options) {
   const { home, since = new Date(0), stats } = options;
   for await (const file of files(join(home, ".gemini/tmp"), [".json", ".jsonl"], since, stats)) {
@@ -16,6 +20,7 @@ export async function* read(options) {
         if (tool?.name !== "run_shell_command") { count(stats, "ignoredEntries"); continue; }
         const command = tool.args?.command;
         if (!candidate(command)) continue;
+        /** @type {import("./shared.mjs").ShellRecord} */
         const record = {
           agent: "gemini", ts: new Date(tool.timestamp ?? message.timestamp ?? NaN), command,
           cwd: tool.args?.directory ?? message.cwd ?? document.cwd,
@@ -34,6 +39,11 @@ export async function* read(options) {
 }
 
 // Older Gemini CLI versions persist one JSON document per session.
+/**
+ * @param {string} file
+ * @param {import("./shared.mjs").ScanStats} [stats]
+ * @returns {Promise<any>}
+ */
 async function legacy(file, stats) {
   try { return JSON.parse(await readFile(file, "utf8")); }
   catch (error) { count(stats, error instanceof SyntaxError ? "malformedEntries" : "unreadableFiles"); }
@@ -43,10 +53,16 @@ async function legacy(file, stats) {
 // (re-appended as tool calls complete, so the last copy wins), `$set` metadata
 // patches that may replace `messages`, and `$rewindTo` markers. Rewinds and
 // replacements keep earlier messages, because their shell calls still ran.
+/**
+ * @param {string} file
+ * @param {import("./shared.mjs").ScanStats} [stats]
+ */
 async function session(file, stats) {
+  /** @type {Record<string, any>} */
   const document = {};
+  /** @type {Map<string, any>} */
   const messages = new Map();
-  const merge = ({ messages: listed, ...metadata }) => {
+  const merge = (/** @type {any} */ { messages: listed, ...metadata }) => {
     if (Array.isArray(listed)) for (const message of listed) if (typeof message?.id === "string") messages.set(message.id, message);
     Object.assign(document, metadata);
   };

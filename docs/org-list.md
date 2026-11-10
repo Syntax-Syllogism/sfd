@@ -6,10 +6,10 @@ description: "sfd org list: which local orgs are listed, how defaults, types and
 `sfd org list`: which local orgs are listed, how defaults, types and expiry are
 derived, what `--status` checks and how it is bounded, the `--json` allowlist,
 the sf-compatible `--sf-json` envelope, and the no-token rule. Source:
-`src/handlers.mjs` (`orgList`, `refreshIfAuthChanged`, `withDeadline`),
+`src/ops/org-list.mjs`, `src/org-session.mjs` (`refreshIfAuthChanged`), `src/sf-util.mjs` (`withDeadline`),
 `src/format.mjs` (`formatOrgList`), `src/sf-json.mjs` (`orgEntry`,
 `sfJson.orgList`), `bin/sfd.mjs` (the `org` case), and `src/rewrite.mjs` (the
-`org list` mapping). Tests: `test/handlers.test.mjs` (the `org list` cases),
+`org list` mapping). Tests: `test/ops-org.test.mjs` (the `org list` cases),
 `test/format.test.mjs`, `test/cli.test.mjs`, `test/rewrite.test.mjs` and
 `test/sf-json.test.mjs`.
 
@@ -50,19 +50,24 @@ sfd org list --json
 
 ## `--status`
 
-- Non-scratch orgs are checked in parallel. Each check calls `refreshAuth()` on
-  the cached org, under a 10 s deadline (`withDeadline`). A success is
+- At most four non-scratch checks and Dev Hub queries run at once (see
+  [Request limits](request-limits.md)). A deadline starts when its check begins,
+  and a timed-out operation retains its slot until it settles; a permanently hung
+  operation can delay queued checks. Each check calls `refreshAuth()` on the
+  cached org, under a 10 s deadline (`withDeadline`). A success is
   `Connected`. A failure is the error's `name`, such as `RefreshTokenAuthError`,
   or `Timeout`.
 - A failed or timed-out check removes the cached org, so the next call tries
   again. Results are not cached.
-- Scratch orgs are grouped by `devHubUsername`. Each Dev Hub is queried once,
+- Scratch orgs are grouped by `devHubUsername`. Each Dev Hub is queried,
   under the same 10 s deadline:
   `SELECT ScratchOrg, Status, ExpirationDate FROM ScratchOrgInfo WHERE ScratchOrg IN (...)`.
   Ids are 15-character prefixes, and rows are matched on that prefix.
 - Scratch orgs without a `devHubUsername` or `orgId` get no status. If the Dev
-  Hub query fails, or the org is missing from its result, the status is blank
-  and the local expiry is kept.
+  Hub query fails for an ordinary reason, or the org is missing from its result,
+  the status is blank and the local expiry is kept. Request-limit errors are
+  retried and reported if retries are exhausted. A timeout sets scratch status to
+  `Timeout`; a later exhausted limit is logged by the daemon.
 
 ## Output
 
@@ -82,16 +87,18 @@ and optionally `expirationDate`, `expired` and `status`. See [Safety policy](saf
 
 `orgList` builds each entry field by field from an allowlist. It never spreads
 the auth fields. No access token, refresh token or client secret appears in any
-output mode, `--json` included. `test/handlers.test.mjs` checks this with a
+output mode, `--json` included. `test/ops-org.test.mjs` checks this with a
 fake that carries those values.
 
 ## Freshness
 
 `orgList` calls `refreshIfAuthChanged()`, the same check `getOrg` uses. It
-compares the modification times of `~/.sfdx` and `~/.sfdx/alias.json`. When
-either changes, the handler clears its cached orgs and traces and the
-`StateAggregator` instance. Logins and logouts show up on the next call, without
-`sfd reload`. Concurrent refreshes share one promise.
+compares the auth stamp: the `*.json` filenames in `~/.sfdx` and the stats of
+the alias and config files in `~/.sf` and `~/.sfdx`. When the stamp changes, the
+daemon runs a global invalidation under the write lock, which clears every
+cached org, trace, metadata type list and safety type, and the `StateAggregator`
+instance. Logins and logouts show up on the next call, without `sfd reload`.
+Token refreshes do not change the stamp. See [auth-cache.md](auth-cache.md).
 
 ## Rewrite hook
 

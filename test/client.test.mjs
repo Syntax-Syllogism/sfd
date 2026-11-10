@@ -2,11 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import net from "node:net";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { call, isRunning, DaemonError } from "../src/client.mjs";
+import { call, isRunning, startDaemon, DaemonError } from "../src/client.mjs";
 import { startServer } from "../src/server.mjs";
 import { paths } from "../src/paths.mjs";
 
@@ -81,4 +81,25 @@ test("client parses fragmented NDJSON events and the final response", async t =>
   const events = [];
   assert.equal((await call("stream", {}, {env, autoStart:false, onEvent:event => events.push(event)})).result, "done");
   assert.deepEqual(events, [{event:"progress",phase:"start"},{event:"notice",message:"hi"}]);
+});
+
+
+test("daemon spawn truncates the separate boot log", async t => {
+  const env = environment();
+  const p = paths(env);
+  const boot = join(p.dir, "sfd.boot.log");
+  writeFileSync(boot, "old startup error");
+  startDaemon(env);
+  t.after(async () => { await cli(["stop"], env); });
+  assert.equal(readFileSync(boot, "utf8"), "");
+});
+
+test("unsafe runtime directory reports daemon error", { skip: process.platform === "win32" }, async () => {
+  const env = environment();
+  const link = `${env.SFD_RUNTIME_DIR}-link`;
+  symlinkSync(env.SFD_RUNTIME_DIR, link);
+  const result = await cli(["status"], { ...env, SFD_RUNTIME_DIR: link });
+  assert.equal(result.status, 3);
+  assert.match(result.stderr, /not a directory/);
+  assert.doesNotMatch(result.stderr, /\n\s+at /);
 });

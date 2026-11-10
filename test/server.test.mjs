@@ -127,3 +127,73 @@ test("client disconnect aborts an active handler", async t => {
   const conn = net.connect(socket, () => conn.write('{"op":"slow","v":"1"}\n'));
   await started; conn.destroy(); await cancelled;
 });
+
+
+test("disconnecting an abortable handler releases active work and permits idle drain", async t => {
+  let entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const { socket, exits } = await server(t, { idleMs: 40, handlers: { slow: async (_req, { signal }) => {
+    entered();
+    await new Promise((_, reject) => signal.addEventListener("abort", () => reject(new Error("disconnected")), { once: true }));
+  } } });
+  const conn = net.connect(socket, () => conn.write('{"op":"slow","v":"1"}\n'));
+  await started;
+  conn.destroy();
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.deepEqual(exits, ["idle"]);
+});
+
+test("malformed requests and prototype keys cannot drain or dispatch", async t => {
+  const { socket, exits } = await server(t, { handlers: { echo: async () => "ok" } });
+  const raw = line => new Promise((resolve, reject) => {
+    const conn = net.connect(socket, () => conn.write(line + "\n"));
+    let data = "";
+    conn.on("data", chunk => { data += chunk; });
+    conn.on("end", () => resolve(JSON.parse(data)));
+    conn.on("error", reject);
+  });
+  for (const line of ["null", "1", '"x"', "[]", "{}", '{"op":null}', '{"op":1}', "{", ""]) {
+    assert.equal((await raw(line)).name, "BadRequest");
+    assert.equal((await send(socket, { op: "echo", v: "1" })).result, "ok");
+  }
+  for (const op of ["constructor", "__proto__"]) assert.equal((await send(socket, { op, v: "1" })).name, "UnknownOperation");
+  assert.deepEqual(exits, []);
+});
+
+test("serialization failure releases the active request and idles", async t => {
+  const circular = {}; circular.self = circular;
+  const { socket, exits } = await server(t, { idleMs: 50, handlers: { circular: async () => circular } });
+  assert.equal((await send(socket, { op: "circular", v: "1" })).name, "SerializeError");
+  await new Promise(resolve => setTimeout(resolve, 100));
+  assert.deepEqual(exits, ["idle"]);
+});
+
+test("oversized and incomplete frames do not prevent idle", async t => {
+  const { socket, exits } = await server(t, { maxRequestBytes: 1024, readTimeoutMs: 30, idleMs: 150, handlers: { echo: async () => "ok" } });
+  assert.equal((await send(socket, { op: "echo", v: "1", body: "x".repeat(1024) })).message, "Request too large");
+  assert.equal((await send(socket, { op: "echo", v: "1" })).result, "ok");
+  await new Promise((resolve, reject) => {
+    const conn = net.connect(socket, () => conn.write("partial"));
+    conn.on("close", resolve); conn.on("error", reject);
+  });
+  await new Promise(resolve => setTimeout(resolve, 180));
+  assert.deepEqual(exits, ["idle"]);
+});
+
+
+test("access logs contain timing and errors without request payloads", async t => {
+  const records = [];
+  const log = { info: (msg, fields) => records.push({ msg, ...fields }), warn: (msg, fields) => records.push({ msg, ...fields }), child: fields => ({ info: (msg, more) => records.push({ msg, ...fields, ...more }) }) };
+  const { socket } = await server(t, { log, handlers: {
+    query: async (_req, transport) => { transport.log.info("handler"); return 1; },
+    boom: async () => { throw new TypeError("secret error message"); }
+  } });
+  await send(socket, { op: "query", v: "1", org: "alias", q: "secret query", body: "secret body" });
+  await send(socket, { op: "boom", v: "1" });
+  const access = records.filter(record => record.msg === "request");
+  assert.equal(access.length, 2); assert.equal(access[0].status, 0);
+  assert.equal(access[0].qLen, 12); assert.equal(access[0].op, "query");
+  assert.equal(typeof access[0].ms, "number"); assert.equal(records[0].reqId, access[0].reqId);
+  assert.equal(access[1].status, 1); assert.equal(access[1].error, "TypeError");
+  assert.doesNotMatch(JSON.stringify(records), /secret/);
+});

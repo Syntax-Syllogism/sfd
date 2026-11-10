@@ -19,11 +19,15 @@ export function createHandlers(root, { supervisor } = {}) {
       if (args.types.includes("ApexClas")) throw Object.assign(new Error("Unknown metadata type: ApexClas. Did you mean ApexClass?"), { name: "UsageError" });
       return { ...args, groups: args.types.map(type => ({ type, members: [{ fullName: args.folder ? `${args.folder}/Name` : "Name", manageableState: "unmanaged" }] })) };
     },
+    rest: async ({ method, url }) => (url === "/empty" ? undefined : url === "/blank" ? "" : { method, url }),
     ping: async () => ({ pong: true }),
+    triggerError: async ({ kind }) => { setImmediate(() => { if (kind === "rejection") Promise.reject(new Error("test rejection")); else throw new Error("test exception"); }); return "scheduled"; },
+    slow: async (req, { emit }) => { emit({ event: "started" }); await new Promise(resolve => setTimeout(resolve, 200)); return "done"; },
     status: async () => ({ pid: process.pid, uptimeSeconds: 0, orgs: [] }),
     reload: async () => ({ reloaded: true }),
     describe: async ({ sobject, raw }) => ({ name: sobject, fields: [], ...(raw ? { full: true } : {}) }),
     query: async ({ org, q, limit, raw }) => {
+      if (q === "inspect-limit") return { totalSize: 1, done: true, records: [{ limit: limit ?? null }] };
       if (q === "bad") throw Object.assign(new Error("Invalid field"), { name: "INVALID_FIELD", errorCode: "INVALID_FIELD" });
       if (q === "empty") return { totalSize: 0, done: true, records: [] };
       if (q === "rows") {

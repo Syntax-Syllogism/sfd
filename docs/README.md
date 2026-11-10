@@ -15,11 +15,17 @@ Installed CLI users can browse these guides with `sfd help -a` or print one with
 ## Commands
 
 - [Query output](query.md): the row limit, the CSV layout, the output mode for each flag combination, the sf-compatible `--sf-json` envelope, and the truncation trailer.
-- [Source tracking, retrieve and deploy](source-tracking.md): `sfd retrieve`, `sfd tracking`, and how `sfd deploy` keeps source tracking in step.
+- [Source tracking, retrieve and deploy](source-tracking.md): `sfd retrieve`, `sfd tracking`, how `sfd deploy` keeps source tracking in step, the shared queue, and what a client disconnect stops.
 - [Debug logs](debug-logs.md): `sfd logs`, `sfd logs get` and `sfd test --logs`, the TraceFlag setup they trigger, and the filtered output format.
 - [Metadata listing](metadata-list.md): `sfd list-metadata-types` and `sfd list-metadata`, folder-based types, output formats and the `--json` shape.
 - [Org list](org-list.md): which local orgs are listed, what `--status` checks, the `--json` allowlist and the no-token rule.
 - [Safety policy](safety.md): how built-in commands and plugin operations are gated by declared effects and target org type.
+
+## Daemon
+
+- [Daemon](daemon.md): the local socket protocol, request limits and read deadline, signal shutdown, client-disconnect aborts, runtime directory checks, and how the daemon survives bad requests and unexpected errors.
+- [Logging](logging.md): the daemon log's JSON-lines format, per-request access records, redaction, rotation, the flush before exit, plugin worker stderr, and the boot log.
+- [Request limits](request-limits.md): the bounded fan-out in `org list --status` and `list-metadata`, backoff for reads that hit a Salesforce request limit, and the API usage shown by `sfd status`.
 
 ## Agents
 

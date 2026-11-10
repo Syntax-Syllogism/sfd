@@ -57,8 +57,6 @@ before they can run. Its
 with modified input; older Codex versions may not support rewriting. See also
 [Gemini's hook reference](https://geminicli.com/docs/hooks/reference/).
 
-Remove an adapter with `sfd hook uninstall --agent <agent> [--project]`.
-
 ## Adapters
 
 `sfd hook claude|codex|gemini` reads hook JSON on stdin. It writes a response
@@ -165,12 +163,14 @@ Deliberate differences from sf:
 
 - Org output always uses sf's redacted access-token placeholder and secrets
   warning. Secrets are never exposed, even with `SF_TEMP_SHOW_SECRETS` set.
-- Queries fetch all pages rather than stopping at sf's configured fetch cap.
+- Consumed JSON queries (`--sf-json`) fetch all pages rather than stopping at
+  sf's configured fetch cap.
 - Error envelopes omit sf's internal `stack` and `cause`. Salesforce query
   error data and Apex failure data are retained to match the supplied contracts.
 
 `--sf-json` cannot be combined with `--json`, `--csv` or `--limit`.
-Default output and the existing compact `--json` mode are unchanged.
+Ordinary query rewrites use the default 2,000-row cap; consumed JSON queries
+use `--sf-json` and fetch every page.
 
 ## Left unchanged
 
@@ -179,7 +179,8 @@ The rewriter skips these, and the agent runs the original command:
 - Commands and flags outside the supported table, legacy `sfdx`, executable
   paths, and env prefixes other than `SF_TARGET_ORG=`.
 - A consumed-output call without `--json`, a command outside the five-command
-  compatibility list (including tests and deploys), or query `-r json`.
+  compatibility list (including tests and deploys), or any query with `-r` or
+  `--result-format`.
 - Consumed output with `2>&1`, since stderr differs between sf and sfd.
 - Consumed org output when the shell command mentions `accessToken` or
   `sfdxAuthUrl` (case-insensitive), and any command mentioning

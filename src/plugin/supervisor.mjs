@@ -15,6 +15,7 @@ export function createSupervisor({ discover, workerPath = fileURLToPath(new URL(
   let closed = false;
   /** @param {WorkerState} state @param {string} [code] */
   function stop(state, code = "worker-crashed") {
+    for (const [root, worker] of workers) if (worker === state) workers.delete(root);
     for (const pending of state.pending.values()) pending.finish(failure(code, `Plugin worker stopped (${code})`));
     state.pending.clear();
     clearTimeout(state.timer);
@@ -42,7 +43,10 @@ export function createSupervisor({ discover, workerPath = fileURLToPath(new URL(
       let timer;
       const abort = () => {
         state.child.send({ t: "abort", id }, () => {});
-        timer = setTimeout(() => { state.child.kill(); }, abortTimeoutMs);
+        timer = setTimeout(() => {
+          for (const [root, worker] of workers) if (worker === state) workers.delete(root);
+          state.child.kill();
+        }, abortTimeoutMs);
         timer.unref();
       };
       const finish = (/** @type {any} */ result) => {
@@ -69,7 +73,11 @@ export function createSupervisor({ discover, workerPath = fileURLToPath(new URL(
   function start(plugin) {
     let state = workers.get(plugin.root);
     if (state) return state;
-    const child = fork(workerPath, [], { serialization: "advanced", env: { ...env, SFD_PLUGIN_ROOT: plugin.root }, execArgv: [], stdio: ["ignore", "ignore", "inherit", "ipc"] });
+    const child = fork(workerPath, [], { serialization: "advanced", env: { ...env, SFD_PLUGIN_ROOT: plugin.root }, execArgv: [], stdio: ["ignore", "ignore", "pipe", "ipc"] });
+    if (child.stderr) {
+      child.stderr.once("data", () => log("plugin stderr", { source: "plugin", root: plugin.root }));
+      child.stderr.resume();
+    }
     state = { child, fingerprint: pluginFingerprint([plugin]), pending: new Map(), ready: Promise.resolve(), active: 0, operations: [], problems: [] };
     const worker = state;
     workers.set(plugin.root, worker);
@@ -164,7 +172,8 @@ export function createSupervisor({ discover, workerPath = fileURLToPath(new URL(
         return await request(worker, { ...req, t: "call" }, options);
       } finally { worker.active--; if (workers.get(plugin.root) === worker) armIdle(worker); }
     },
-    authChanged() { for (const worker of workers.values()) worker.child.send({ t: "auth-changed" }, () => {}); },
+    /** @param {string} username */
+    authChanged(username) { for (const worker of workers.values()) worker.child.send({ t: "auth-changed", username }, () => {}); },
     shutdown() { closed = true; for (const worker of workers.values()) stop(worker); workers.clear(); }
   };
 }

@@ -1,12 +1,19 @@
 export const SF_JSON_COMMANDS = new Set(['query', 'describe', 'apex', 'org', 'org list']);
 export const REDACTED_TOKEN = "[REDACTED] Use 'sf org auth show-access-token' to view";
-export const orgWarnings = command => [`Secrets are now hidden from 'sf ${command}' command output. Use the 'sf org auth' commands instead. As a temporary workaround, you can set SF_TEMP_SHOW_SECRETS=true to render these secrets. This workaround will be removed in an upcoming release.`];
+export const orgWarnings = (/** @type {string} */ command) => [`Secrets are now hidden from 'sf ${command}' command output. Use the 'sf org auth' commands instead. As a temporary workaround, you can set SF_TEMP_SHOW_SECRETS=true to render these secrets. This workaround will be removed in an upcoming release.`];
+/**
+ * @param {Record<string, any>} source
+ * @param {string} fields
+ */
 export function pick(source, fields) {
   return Object.fromEntries(fields.split(' ').filter(key => source[key] !== undefined).map(key => [key, source[key]]));
 }
 const displayFields = 'id devHubId apiVersion instanceUrl username clientId status connectedStatus expirationDate createdBy edition namespace orgName createdDate signupUsername alias';
 const listFields = 'alias clientId connectedStatus defaultMarker instanceApiVersion instanceApiVersionLastRetrieved instanceName instanceUrl isDefaultDevHubUsername isDefaultUsername isDevHub isSandbox isScratch lastUsed loginUrl name namespacePrefix orgEdition orgId tracksSource trailExpirationDate username attributes created createdBy createdDate createdOrgInstance devHubId devHubOrgId devHubUsername edition expirationDate isExpired namespace orgName signupUsername status';
+/** @type {(raw: Record<string, any>) => Record<string, any>} */
 export const orgEntry = raw => ({ ...pick(raw, listFields), accessToken: REDACTED_TOKEN });
+// The raw values are daemon results whose shape depends on the command.
+/** @type {Record<string, (raw: any) => any>} */
 export const sfJson = {
   query(raw) { const result = { ...raw }; if (result.done) delete result.nextRecordsUrl; return result; },
   describe: raw => raw,
@@ -15,6 +22,7 @@ export const sfJson = {
   },
   org: raw => ({ ...pick(raw, displayFields), accessToken: REDACTED_TOKEN }),
   orgList(raw) {
+    /** @type {Record<string, Record<string, any>[]>} */
     const result = { other: [], sandboxes: [], nonScratchOrgs: [], devHubs: [], scratchOrgs: [] };
     for (const data of raw.orgs) {
       const entry = orgEntry(data);
@@ -29,12 +37,22 @@ export const sfJson = {
     return result;
   }
 };
+/** @type {Record<string, string>} */
 const contexts = { query: 'DataSoqlQueryCommand', describe: 'Describe', apex: 'Run', org: 'OrgDisplayCommand', orgList: 'OrgListCommand' };
+/**
+ * @param {string} command
+ * @param {any} error
+ * @param {number} [exitCode]
+ */
 export function sfError(command, error, exitCode = 1) {
   const name = exitCode === 4 ? error.name : error.errorCode ?? error.name ?? 'Error';
   const context = contexts[command] ?? command;
-  return { name, message: error.message, exitCode, context, ...(error.data ? { data: error.data } : error.errorCode ? { data: { message: error.message, errorCode: error.errorCode } } : {}), ...(error.actions ? { actions: error.actions } : {}), warnings: [], code: error.errorCode ? '1' : name, status: exitCode, commandName: context };
+  return { name, message: error.message, exitCode, context, ...(error.data ? { data: error.data } : error.errorCode ? { data: { message: error.message, errorCode: error.errorCode } } : {}), ...(error.actions ? { actions: error.actions } : {}), warnings: /** @type {string[]} */ ([]), code: error.errorCode ? '1' : name, status: exitCode, commandName: context };
 }
+/**
+ * @param {string} command
+ * @param {any} response
+ */
 export function sfEnvelope(command, response) {
   if (response.status !== 0) return sfError(command, response, response.exitCode === 4 ? 4 : response.name === 'UsageError' || response.name === 'NamedOrgNotFoundError' ? 2 : 1);
   const result = sfJson[command](response.result);

@@ -42,6 +42,12 @@ test("explicit POSIX mode is identical to the default and unknown shells skip", 
   assert.ok(rewrite("sf org display", { shell: "cmd" }).skip);
 });
 
+test("query rewrites use the CLI default except for consumed sf JSON", () => {
+  assert.equal(rewrite("sf data query -q q").command, "sfd query 'q'");
+  assert.equal(rewrite("sf data query -q q -r csv").command, "sfd query 'q' --csv");
+  assert.equal(rewrite("sf data query -q q --json | jq .").command, "sfd query 'q' --sf-json | jq .");
+});
+
 const rewrites = [
   ["sf org list metadata-types -o dev --json", "sfd list-metadata-types -o 'dev'"],
   ["sf org list metadata -m Report --folder Public -o dev", "sfd list-metadata -m 'Report' --folder 'Public' -o 'dev'"],

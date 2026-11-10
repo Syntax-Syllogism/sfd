@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-10
+
+### Changed
+
+- Daemon logs now use JSON lines instead of plain text, include request timings, and rotate while the daemon runs. Early startup errors go to `sfd.boot.log`
+- Queries now return at most 2,000 rows by default; use `--no-limit` to fetch all pages. `--sf-json` remains uncapped
+- Salesforce API fan-out is bounded, and the daemon backs off when Salesforce request limits are reached
+- Cached authentication is now invalidated per org in a coordinated way
+- The daemon no longer rewrites the org type on every request
+
+### Fixed
+
+- `sfd rest` no longer prints `undefined` when Salesforce returns an empty body (for example a 204 from `PATCH` or `DELETE`). It prints nothing, and `--json` returns `result: null`
+- The daemon stops waiting on a request's work when the client disconnects
+- Expired Salesforce sessions are retried for read operations only
+- The daemon drains in-flight requests when it receives a shutdown signal
+
+### Security
+
+- The daemon's request handling boundary is hardened
+- The daemon validates its runtime directory at startup, resetting its mode to 0700 before the check and refusing to run if the check fails
+
 ## [0.7.1] - 2026-11-09
 
 ### Fixed

@@ -103,6 +103,7 @@ test("production apex requires exact single-use confirmation and reports org typ
   await f.handlers.org({ org: "prod" });
   assert.equal(f.calls.queries, 2);
   mkdirSync(join(f.dir, ".sfdx"));
+  writeFileSync(join(f.dir, ".sfdx", "login.json"), "{}");
   await f.handlers.org({ org: "prod" });
   assert.equal(f.calls.queries, 3);
 });

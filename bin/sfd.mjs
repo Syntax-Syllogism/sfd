@@ -5,8 +5,8 @@ import { parseArgs } from "node:util";
 import { call, isRunning, startDaemon, DaemonError, VERSION } from "../src/client.mjs";
 import { findProjectDir, resolveTargetOrg } from "../src/project.mjs";
 import { formatMetadataTypes, formatMetadataList, formatOrgList, formatApex, formatLog, formatLogList, formatDeploy, formatTests, formatRetrieve, formatTracking, toCsv } from "../src/format.mjs";
-import { paths } from "../src/paths.mjs";
-import { COMMANDS, commandHelp, commandUsage } from "../src/commands.mjs";
+import { paths, RuntimeDirError } from "../src/paths.mjs";
+import { COMMANDS, DEFAULT_QUERY_LIMIT, commandHelp, commandUsage } from "../src/commands.mjs";
 import { helpUsageError, renderCommandManual, renderGuide, renderHelpIndex } from "../src/help-topics.mjs";
 import { snippet, upsertSnippet } from "../src/snippet.mjs";
 import { UsageError } from "../src/usage-error.mjs";
@@ -36,6 +36,7 @@ Run 'sfd help <command|guide>' for full documentation.
 
 Exit codes: 0 success, 1 operation failed, 2 usage error, 3 daemon error, 4 approval required or policy denied.`;
 
+/** @type {import("node:util").ParseArgsOptionsConfig} */
 const options = {
   "target-org": { type: "string", short: "o" },
   confirm: { type: "string" },
@@ -61,6 +62,7 @@ const options = {
   "no-trace": { type: "boolean" },
   count: { type: "string" },
   limit: { type: "string" },
+  "no-limit": { type: "boolean" },
   user: { type: "string" },
   file: { type: "string", short: "f" },
   method: { type: "string", short: "X" },
@@ -82,6 +84,7 @@ const options = {
   wait: { type: "string", short: "w" }
 };
 
+/** @type {(list: string[] | undefined) => string[] | undefined} */
 const split = list => list?.flatMap(v => v.split(",")).map(v => v.trim()).filter(Boolean);
 
 function readStdin() {
@@ -89,18 +92,21 @@ function readStdin() {
   try { return readFileSync(0, "utf8"); } catch { return ""; }
 }
 
+/** @param {string} file */
 function readInputFile(file) {
   const path = resolve(file);
   try { return readFileSync(path, "utf8"); }
   catch (e) { throw new UsageError(`Cannot read input file ${path}: ${e.message}`); }
 }
 
+/** @param {string | undefined} spec */
 function readBody(spec) {
   if (spec === undefined) return undefined;
   const text = spec.startsWith("@") ? readInputFile(spec.slice(1)) : spec;
   try { return JSON.parse(text); } catch { return text; }
 }
 
+/** @param {Record<string, any>} values */
 function wait(values) {
   if (values.wait === undefined) return undefined;
   const minutes = Number(values.wait);
@@ -108,6 +114,7 @@ function wait(values) {
   return minutes;
 }
 
+/** @param {string | undefined} value */
 function queryLimit(value) {
   if (value === undefined) return undefined;
   const limit = Number(value);
@@ -115,10 +122,17 @@ function queryLimit(value) {
   return limit;
 }
 
+/** @param {unknown} value */
 function print(value) {
   process.stdout.write((typeof value === "string" ? value : JSON.stringify(value, null, 2)) + "\n");
 }
 
+/**
+ * Plugin results are produced by plugin operations, so their shape is dynamic.
+ * @param {any} result
+ * @param {Record<string, any>} values
+ * @param {(data: unknown) => unknown} format
+ */
 async function renderPluginResult(result, values, format) {
   if (values.json) print(result);
   else if (result.ok) {
@@ -136,6 +150,10 @@ async function renderPluginResult(result, values, format) {
   return !result.ok ? (result.code === "usage" ? 2 : 1) : result.failures > 0 ? 1 : 0;
 }
 
+/**
+ * @param {string[]} argv
+ * @returns {Promise<number>}
+ */
 async function run(argv) {
   // Version is a side-effect-free global flag. It takes precedence over commands and --sf-json.
   if (argv.includes("--version")) { print(`sfd ${VERSION}`); return 0; }
@@ -194,7 +212,7 @@ async function run(argv) {
       try { targetOrg = resolveTargetOrg(values["target-org"], process.cwd()); } catch {}
       let lastProgress = 0;
       const res = await call("plugin", { operation: command.operation, options: operationOptions, targetOrg,
-        apiVersion: values["api-version"], cwd: process.cwd(), confirm: values.confirm, mode: values.plan ? "plan" : "apply" }, { onEvent: event => {
+        apiVersion: values["api-version"], cwd: process.cwd(), confirm: values.confirm, mode: values.plan ? "plan" : "apply" }, { onEvent: (/** @type {any} */ event) => {
         if (!values.quiet && event.event === "progress" && Date.now() - lastProgress >= 250) {
           lastProgress = Date.now(); process.stderr.write(`progress: ${event.phase ?? ""} ${event.message ?? ""}\n`);
         }
@@ -204,7 +222,10 @@ async function run(argv) {
       return renderPluginResult(result, values, data => formatPlugin(data, command));
     }
   }
-  const { values, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
+  // The shared option table spans every command, so each value is read by the command that owns it.
+  const { values: parsed, positionals } = parseArgs({ args: argv, options, allowPositionals: true });
+  /** @type {Record<string, any>} */
+  const values = parsed;
   let [command, ...rest] = positionals;
   if (values.help && command) {
     const key = ["logs get", "org list", "plugin list"].find(name => name === `${command} ${rest[0]}`) ?? command;
@@ -256,13 +277,14 @@ async function run(argv) {
     if (command === "plugin" && (rest.length !== 1 || rest[0] !== "list")) throw new UsageError("Use sfd plugin list [--json].");
     if (command === "op" && rest.length !== 1) throw new UsageError("op needs exactly one operation id.");
     let lastProgress = 0;
-    const onEvent = event => {
+    const onEvent = (/** @type {any} */ event) => {
       if (values.quiet) return;
       if (event.event === "progress" && Date.now() - lastProgress >= 250) {
         lastProgress = Date.now();
         process.stderr.write(`progress: ${event.phase ?? ""} ${event.done ?? ""}/${event.total ?? ""} ${event.message ?? ""}\n`);
       }
     };
+    /** @type {Record<string, unknown>} */
     let args = {};
     if (command === "op") {
       const spec = values["options-json"];
@@ -275,11 +297,13 @@ async function run(argv) {
       try { targetOrg = org(); } catch { /* Org-free operations do not need a default. */ }
       args = { operation: rest[0], options: operationOptions, targetOrg, cwd, confirm: values.confirm, mode: values.plan ? "plan" : "apply" };
     }
+    // Plugin and plugin-list results are dynamic, so the CLI reads them untyped.
+    /** @type {any} */
     const res = await call(command === "op" ? "plugin" : "pluginList", args, { onEvent });
     if (res.status !== 0) return responseError(res, values);
     const result = res.result;
     if (command === "plugin") {
-      print(values.json ? result : result.map(p => `${p.name} ${p.version}  ${p.root}  ${p.operations.map(o => `${o.id} [${o.effects.join(",")}]`).join("; ")}  ${p.worker}${p.rss ? ` (${Math.round(p.rss / 1024 / 1024)} MiB)` : ""}${p.problems.length ? `  ${p.problems.join("; ")}` : ""}`).join("\n"));
+      print(values.json ? result : result.map((/** @type {any} */ p) => `${p.name} ${p.version}  ${p.root}  ${p.operations.map((/** @type {any} */ o) => `${o.id} [${o.effects.join(",")}]`).join("; ")}  ${p.worker}${p.rss ? ` (${Math.round(p.rss / 1024 / 1024)} MiB)` : ""}${p.problems.length ? `  ${p.problems.join("; ")}` : ""}`).join("\n"));
       return 0;
     }
     return renderPluginResult(result, values, data => JSON.stringify(data) ?? "null");
@@ -300,9 +324,10 @@ async function run(argv) {
       return 0;
     case "status": {
       if (!(await isRunning())) { print(values.json ? { running: false } : "sfd not running"); return 0; }
+      /** @type {any} */
       const res = await call("status", {}, { autoStart: false });
       const s = { running: true, version: VERSION, socket: paths().socket, log: paths().log, ...res.result };
-      print(values.json ? s : `sfd ${VERSION} running (pid ${s.pid}, up ${s.uptimeSeconds}s), orgs: ${s.orgs.join(", ") || "none"}\nlog: ${s.log}${s.plugins?.length ? `\nplugins: ${s.plugins.map(p => `${p.name} ${p.worker}${p.rss ? ` ${Math.round(p.rss / 1024 / 1024)} MiB` : ""}`).join(", ")}` : ""}`);
+      print(values.json ? s : `sfd ${VERSION} running (pid ${s.pid}, up ${s.uptimeSeconds}s), orgs: ${s.orgs.join(", ") || "none"}\nlog: ${s.log}${Object.keys(s.apiUsage ?? {}).length ? `\nAPI usage: ${Object.entries(s.apiUsage).map(([org, usage]) => `${org} ${usage.used}/${usage.limit}`).join(", ")}` : ""}${s.plugins?.length ? `\nplugins: ${s.plugins.map((/** @type {any} */ p) => `${p.name} ${p.worker}${p.rss ? ` ${Math.round(p.rss / 1024 / 1024)} MiB` : ""}`).join(", ")}` : ""}`);
       return 0;
     }
     case "reload": {
@@ -313,13 +338,16 @@ async function run(argv) {
     }
   }
 
+  /** @type {Record<string, any>} */
   let req;
+  /** @type {(result: any) => unknown} */
   let render = result => result;
   switch (command) {
     case "query": {
       const q = rest.join(" ") || readStdin().trim();
       if (!q) throw new UsageError("query needs a SOQL string.");
-      const limit = queryLimit(values.limit);
+      if (values.limit !== undefined && values["no-limit"]) throw new UsageError("Use either --limit or --no-limit.");
+      const limit = values["no-limit"] || values["sf-json"] ? undefined : queryLimit(values.limit) ?? DEFAULT_QUERY_LIMIT;
       req = { org: org(), q, tooling: values.tooling, all: values.all, raw: values.raw || values["sf-json"], limit };
       if (values.csv) render = result => toCsv(result.records);
       break;
@@ -437,12 +465,16 @@ async function run(argv) {
   }
 
   if (values.confirm !== undefined) req.confirm = values.confirm;
+  // Each command renders its own result shape, so the response is read untyped here.
+  /** @type {any} */
   const res = await call(command, req);
   if (values["sf-json"]) {
     const envelope = sfEnvelope(command, res);
     print(envelope);
     return envelope.status;
   }
+  // An empty body (204 No Content) reaches here as undefined or "": report it as a null result.
+  if (command === "rest" && res.status === 0 && (res.result === undefined || res.result === "")) res.result = null;
   const trace = res.result?.trace ?? res.trace;
   if (trace) {
     process.stderr.write(`sfd: enabled debug logging for ${trace.username} until ${trace.expires} (TraceFlag ${trace.id})\n`);
@@ -453,16 +485,23 @@ async function run(argv) {
     process.stderr.write(`${res.name}: ${res.message}\n`);
     return res.name === "UsageError" ? 2 : 1;
   }
+  // Nothing to print for an empty REST body, like `sf api request rest`.
+  if (command === "rest" && res.result === null) return okStatus(command, res.result);
   const output = render(res.result);
   if (command !== "query" || !values.csv || output) print(output);
   if (command === "query" && res.result.truncated) {
     const { totalSize, records } = res.result;
-    const trailer = `… ${(totalSize - records.length).toLocaleString("en-US")} more rows not shown (totalSize ${totalSize.toLocaleString("en-US")}); raise --limit or narrow the query\n`;
+    const hint = values.limit === undefined ? "use --no-limit for all rows, or narrow the query" : "raise --limit or narrow the query";
+    const trailer = `… ${(totalSize - records.length).toLocaleString("en-US")} more rows not shown (totalSize ${totalSize.toLocaleString("en-US")}); ${hint}\n`;
     (values.csv ? process.stderr : process.stdout).write(trailer);
   }
   return okStatus(command, res.result);
 }
 
+/**
+ * @param {any} res
+ * @param {Record<string, any>} values
+ */
 function responseError(res, values) {
   const exitCode = res.exitCode ?? (res.name === "UsageError" ? 2 : 1);
   if (values.json) print(res.approvalRequired ? { status: 4, approvalRequired: res.approvalRequired } : { ...res, status: exitCode });
@@ -475,6 +514,10 @@ function responseError(res, values) {
 }
 
 // A request can succeed while the Salesforce operation fails (compile error, failed deploy or test).
+/**
+ * @param {string} command
+ * @param {any} result
+ */
 function okStatus(command, result) {
   if (command === "apex") return result.compiled && result.success ? 0 : 1;
   if (command === "deploy" || command === "retrieve") return result.success ? 0 : 1;
@@ -486,15 +529,15 @@ try {
   process.exitCode = await run(process.argv.slice(2));
 } catch (e) {
   if (process.argv.includes("--sf-json")) {
-    const exitCode = e instanceof UsageError || e.code?.startsWith?.("ERR_PARSE_ARGS") ? 2 : e instanceof DaemonError || ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"].includes(e.code) ? 3 : 1;
+    const exitCode = e instanceof UsageError || e.code?.startsWith?.("ERR_PARSE_ARGS") ? 2 : e instanceof DaemonError || e instanceof RuntimeDirError || ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"].includes(e.code) ? 3 : 1;
     const command = process.argv[2] === "org" && process.argv[3] === "list" ? "orgList" : process.argv[2];
     print(sfError(command, e, exitCode));
     process.exitCode = exitCode;
   } else if (e instanceof UsageError || e.code?.startsWith?.("ERR_PARSE_ARGS")) {
     process.stderr.write(`${e.message}\n`);
     process.exitCode = 2;
-  } else if (e instanceof DaemonError || ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"].includes(e.code)) {
-    process.stderr.write(`sfd daemon error: ${e.message}\nlog: ${paths().log}\n`);
+  } else if (e instanceof DaemonError || e instanceof RuntimeDirError || ["ENOENT", "ECONNREFUSED", "ECONNRESET", "EPIPE"].includes(e.code)) {
+    process.stderr.write(`sfd daemon error: ${e.message}\n${e instanceof RuntimeDirError ? "" : `log: ${paths().log}\n`}`);
     process.exitCode = 3;
   } else {
     process.stderr.write(`${e.message}\n`);

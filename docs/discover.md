@@ -12,9 +12,9 @@ selection, streaming lines, timestamp filter, output sizing),
 `src/discover/gemini.mjs` (readers), `src/discover/worker.mjs` (one worker thread
 per agent), the `discover` branch in `bin/sfd.mjs` (before the daemon switch),
 the `discover` entry in `COMMANDS` (`src/commands.mjs`), `lex` and `rewrite`
-in `src/rewrite.mjs`, and `split` in `src/shell.mjs` (segment boundaries). Tests: `test/discover.test.mjs` with fixtures in
-`test/fixtures/discover/`. `test/snippet.test.mjs` also excludes the discover
-line when it checks that help output is unchanged.
+in `src/rewrite.mjs`, and `split` in `src/shell.mjs` (segment boundaries).
+Tests: `test/discover.test.mjs`, with fixtures in `test/fixtures/discover/`.
+`test/snippet.test.mjs` also excludes the discover line when it checks that help output is unchanged.
 
 ```bash
 sfd discover
@@ -77,7 +77,7 @@ the transcript file path. Missing stores are treated as empty.
 1. Store files are found recursively. Files with a modification time older than
    `--since` are skipped without being opened.
 2. JSONL is streamed line by line, so large files are never held whole. Each
-   record's timestamp must be at or after the window start. A record with an
+   record's timestamp must be at or after the window start. A record with a
    missing or unparseable timestamp is dropped and counted as malformed.
 3. `--project` requires a string `cwd`. Records without one are excluded when the
    filter is set.

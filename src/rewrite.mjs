@@ -3,9 +3,30 @@ import { SF_JSON_COMMANDS } from "./sf-json.mjs";
 import { synchronousTestError } from "./test-options.mjs";
 
 // This is deliberately a literal-shell subset. Unknown shell syntax stays with sf.
-const quote = value => `'${value.replaceAll("'", "'\\''")}'`;
+/**
+ * The policy view of one rewritten call.
+ * @typedef {{ operation: string, args: { org?: string, method?: string }, effects?: string[] }} PolicyCall
+ */
+/**
+ * Result of rewriting a command. A skipped command has only `skip`.
+ * @typedef {{ skip?: string, command?: string, reason?: string, rewritten?: number, skipped?: string[],
+ *   policyCalls?: PolicyCall[], policyCall?: PolicyCall }} RewriteResult
+ */
+/**
+ * Result of mapping one sf argv to sfd. A skipped mapping has only `skip`.
+ * @typedef {{ skip?: string, command?: string, policyCall?: PolicyCall, apex?: boolean, subcommand?: string,
+ *   json?: boolean, format?: boolean, file?: boolean }} MappedArgs
+ */
+/** @typedef {{ plugins: any[] }} CommandTable */
+
+const quote = (/** @type {string} */ value) => `'${value.replaceAll("'", "'\\''")}'`;
+/** @param {string} reason */
 const skip = reason => ({ skip: reason });
 
+/**
+ * @param {string} source
+ * @returns {{ value?: string, op?: string, start: number, end: number }[]}
+ */
 export function lex(source) {
   const tokens = [];
   let i = 0;
@@ -63,28 +84,39 @@ const mappings = [
   { sf: "org display", sfd: "org", flags: [org, json] }
 ];
 
+/** @param {CommandTable} [table] */
 export function allMappings(table = { plugins: [] }) {
   // --confirm is never forwarded: an sf flag cannot carry an sfd hash, and forwarding would bypass deny rules for sfd --confirm.
-  const plugin = table.plugins.flatMap(p => p.commands.filter(c => c.sf).map(c => ({
+  const plugin = table.plugins.flatMap(p => p.commands.filter((/** @type {any} */ c) => c.sf).map((/** @type {any} */ c) => ({
     sf: c.sf.join(" "), sfd: c.name.join(" "), plugin: true, effects: c.effects?.length ? c.effects : ["org-write"],
-    requiredFlags: c.flags.filter(f => f.required).map(f => f.name),
-    flags: [org, ["json", "--json", false], ["api-version", "--api-version", true], ...c.flags.filter(f => !["target-org", "json", "api-version", "confirm"].includes(f.name)).map(f =>
+    requiredFlags: c.flags.filter((/** @type {any} */ f) => f.required).map((/** @type {any} */ f) => f.name),
+    flags: [org, ["json", "--json", false], ["api-version", "--api-version", true], ...c.flags.filter((/** @type {any} */ f) => !["target-org", "json", "api-version", "confirm"].includes(f.name)).map((/** @type {any} */ f) =>
       [[f.char, f.name].filter(Boolean).join(" "), `--${f.name}`, f.type !== "boolean", f.multiple])]
   })));
   return [...mappings, ...plugin.sort((a, b) => b.sf.split(" ").length - a.sf.split(" ").length)];
 }
 
+/**
+ * @param {string[]} argv
+ * @param {(value: string) => string} quoteValue
+ * @param {CommandTable} [table]
+ * @returns {MappedArgs}
+ */
 function mapArgs(argv, quoteValue, table) {
-  const mapping = allMappings(table).find(m => m.sf.split(" ").every((v, i) => argv[i] === v));
+  /** @type {any} */
+  const mapping = allMappings(table).find(m => m.sf.split(" ").every((/** @type {string} */ v, /** @type {number} */ i) => argv[i] === v));
   if (!mapping) return skip("unsupported sf command");
   const args = argv.slice(mapping.sf.split(" ").length);
-  const seen = new Map(), output = [], positionals = [];
+  /** @type {Map<string, string[]>} */
+  const seen = new Map();
+  /** @type {string[]} */
+  const output = [], positionals = [];
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (!arg.startsWith("-")) { positionals.push(arg); continue; }
     const match = /^(?:--([^=]+)|-([A-Za-z]))(?:=(.*))?$/.exec(arg);
     const name = match?.[1] ?? match?.[2];
-    const spec = mapping.flags.find(f => f[0].split(" ").includes(name));
+    const spec = mapping.flags.find((/** @type {any[]} */ f) => f[0].split(" ").includes(name));
     if (!spec) return skip(`unsupported flag ${arg.split("=")[0]}`);
     const [names, target, takesValue, multiple] = spec;
     const key = names.split(" ")[0];
@@ -113,7 +145,7 @@ function mapArgs(argv, quoteValue, table) {
   if (mapping.sfd === "org list" && !seen.has("skip-connection-status")) output.push("--status");
   if (mapping.required && !seen.has(mapping.required)) return skip(`missing required ${mapping.required} flag`);
   for (const name of mapping.requiredFlags ?? []) {
-    const key = mapping.flags.find(f => f[0].split(" ").includes(name))[0].split(" ")[0];
+    const key = mapping.flags.find((/** @type {any[]} */ f) => f[0].split(" ").includes(name))[0].split(" ")[0];
     if (!seen.has(key)) return skip(`missing required --${name} flag`);
   }
   if (mapping.sfd === "list-metadata" && !seen.has("m")) return skip("metadata listing needs metadata-type");
@@ -121,7 +153,7 @@ function mapArgs(argv, quoteValue, table) {
   if (mapping.sfd === "retrieve" && ["d", "m", "x"].filter(key => seen.has(key)).length > 1) return skip("retrieve selectors are mutually exclusive");
   if (mapping.sfd === "test" && !seen.has("w") && !seen.has("y")) return skip("asynchronous tests need --wait or --synchronous");
   if (mapping.sfd === "test" && seen.has("y")) {
-    const selectors = key => seen.get(key)?.flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean);
+    const selectors = (/** @type {string} */ key) => seen.get(key)?.flatMap(value => value.split(",")).map(value => value.trim()).filter(Boolean);
     const error = synchronousTestError({
       classNames: selectors("n"), tests: selectors("t"), suiteNames: selectors("s"), testLevel: seen.get("l")?.[0]
     });
@@ -143,20 +175,28 @@ function mapArgs(argv, quoteValue, table) {
   }
   const positional = logTarget ? [logTarget] : mapping.required ? seen.get(mapping.required) : positionals;
   // Protect sfd's own option parser from values that could be interpreted as options.
-  if (positional.some(v => v.startsWith("-"))) return skip("unsupported positional value");
+  if (positional.some((/** @type {string} */ v) => v.startsWith("-"))) return skip("unsupported positional value");
   return { command: ["sfd", mapping.sfd, ...positional.map(quoteValue), ...output].join(" "), policyCall: { operation: mapping.sfd, args: { org: seen.get("o")?.[0], method: seen.get("X")?.[0] }, ...(mapping.plugin ? { effects: mapping.effects } : {}) }, apex: mapping.sfd === "apex", subcommand: mapping.sfd, json: seen.has("json"), format: seen.has("r"), file: seen.has("f") };
 }
 
+/**
+ * @param {unknown} command
+ * @param {{ shell?: string, table?: CommandTable, includePolicy?: boolean }} [options]
+ * @returns {RewriteResult}
+ */
 export function rewrite(command, { shell = "posix", table, includePolicy = false } = {}) {
   if (typeof command !== "string" || !command.trim()) return skip("empty command");
   try {
+    /** @type {RewriteResult} */
     const result = shell === "powershell" ? rewritePowerShell(command, table) : shell === "posix" ? rewriteShell(command, table) : skip("unsupported shell");
     if (!includePolicy) delete result.policyCalls;
     return result;
   } catch (error) { return skip(error.message); }
 }
 
+/** @param {string} source */
 function lexPowerShell(source) {
+  /** @type {string[]} */
   const words = [];
   let i = 0;
   while (i < source.length) {
@@ -188,13 +228,18 @@ function lexPowerShell(source) {
   return words;
 }
 
+/**
+ * @param {string} command
+ * @param {CommandTable} [table]
+ * @returns {RewriteResult}
+ */
 function rewritePowerShell(command, table) {
   // Keep a strict subset that passes the same values through PowerShell 5.1 and 7.
   const source = command.replace(/^[ \t]+/, "").replace(/[ \t]*(?:\r?\n)?[ \t]*$/, "");
   if (/[\r\n\x00-\x08\x0b-\x1f\u2018-\u201e]/.test(source) || source.includes("--%")) return skip("unsupported PowerShell syntax");
   if (!/^sf(?:[ \t]|$)/.test(source)) return skip("not a plain sf invocation");
   const words = lexPowerShell(source);
-  const quotePowerShell = value => {
+  const quotePowerShell = (/** @type {string} */ value) => {
     if (!value || value.includes('"') || value.endsWith("\\")) throw Error("unsafe PowerShell native argument");
     return `'${value.replaceAll("'", "''")}'`;
   };
@@ -204,6 +249,14 @@ function rewritePowerShell(command, table) {
   return { command: mapped.command, reason: "sfd: warm daemon, ~0.3 s", rewritten: 1, skipped: [], policyCalls: [mapped.policyCall] };
 }
 
+/**
+ * @param {string} text
+ * @param {boolean} consumed
+ * @param {boolean} stdin
+ * @param {string} whole
+ * @param {CommandTable} [table]
+ * @returns {RewriteResult}
+ */
 function rewriteElement(text, consumed, stdin, whole, table) {
   let continued = "", single = false, double = false;
   for (let i = 0; i < text.length; i++) {
@@ -223,6 +276,7 @@ function rewriteElement(text, consumed, stdin, whole, table) {
   const tokens = lex(head);
   const start = tokens[0]?.value?.startsWith("SF_TARGET_ORG=") ? 1 : 0;
   if (tokens[start]?.value !== "sf") return skip("not a plain sf invocation");
+  /** @type {string[]} */
   const words = [], redirects = [];
   let heredoc = "";
   for (let i = start + 1; i < tokens.length; i++) {
@@ -257,15 +311,24 @@ function rewriteElement(text, consumed, stdin, whole, table) {
   return { policyCall: mapped.policyCall, command: prefix + mapped.command + redirects.map(r => ` ${r}`).join("") + (heredoc ? ` ${heredoc}` : "") + trailing };
 }
 
+/**
+ * @param {string} command
+ * @param {CommandTable} [table]
+ * @returns {RewriteResult}
+ */
 function rewriteShell(command, table) {
   if (/SF_TEMP_SHOW_SECRETS/i.test(command)) return skip("consumer may read a token sfd never prints");
   const parsed = split(command);
   if (parsed.skip) return parsed;
-  const replacements = [], skipped = [];
+  /** @type {{ start: number, end: number, text: string, policyCall: PolicyCall }[]} */
+  const replacements = [];
+  /** @type {string[]} */
+  const skipped = [];
   for (const segment of parsed.segments) {
     for (const [index, element] of segment.elements.entries()) {
       const text = command.slice(element.start, element.end);
       if (!/^\s*(?:SF_TARGET_ORG=(?:'[^']*'|"[^"]*"|\S+)\s+)?(?:sf|'sf'|"sf")(?=\s|$)/.test(text)) continue;
+      /** @type {RewriteResult} */
       let result;
       try { result = rewriteElement(text, index < segment.elements.length - 1, index > 0, command, table); }
       catch (error) { result = skip(error.message); }

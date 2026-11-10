@@ -12,7 +12,8 @@
       "@salesforce/core": [
         "./test/stubs/salesforce-core.d.ts"
       ]
-    }
+    },
+    "noImplicitAny": true
   },
   "files": [
     "index.d.ts",

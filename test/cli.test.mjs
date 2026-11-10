@@ -1,12 +1,14 @@
 import { socketPath } from '../src/paths.mjs';
 import test from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import net from "node:net";
+import { PROTOCOL } from "../src/version.mjs";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, mkdirSync, existsSync, cpSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { COMMANDS } from "../src/commands.mjs";
+import { COMMANDS, DEFAULT_QUERY_LIMIT } from "../src/commands.mjs";
 import { VERSION } from "../src/version.mjs";
 
 const bin = fileURLToPath(new URL("../bin/sfd.mjs", import.meta.url));
@@ -254,13 +256,31 @@ test("TraceFlag notices survive a subsequent log error in text and JSON", () => 
 });
 
 
+test("query applies the default limit and permits opting out", () => {
+  for (const [flags, expected] of [[[], DEFAULT_QUERY_LIMIT], [["--no-limit"], null], [["--limit", "5"], 5], [["--sf-json"], null]]) {
+    const result = sfd(["query", "inspect-limit", ...flags]);
+    assert.equal(result.status, 0, result.stderr);
+    const output = JSON.parse(result.stdout);
+    assert.equal((output.result ?? output).records[0].limit, expected);
+  }
+  const conflict = sfd(["query", "rows", "--limit", "5", "--no-limit"]);
+  assert.equal(conflict.status, 2);
+  assert.match(conflict.stderr, /Use either --limit or --no-limit/);
+  const defaultResult = sfd(["query", "rows", "--csv"]);
+  assert.equal(defaultResult.status, 0, defaultResult.stderr);
+  assert.match(defaultResult.stderr, /use --no-limit for all rows, or narrow the query/);
+  const json = sfd(["query", "rows", "--json"]);
+  assert.equal(json.status, 0, json.stderr);
+  assert.equal(JSON.parse(json.stdout).result.truncated, true);
+});
+
 test("query CSV and truncation trailers respect stdout, stderr and JSON modes", () => {
   const trailer = "… 5,011 more rows not shown (totalSize 5,012); raise --limit or narrow the query\n";
   const csv = sfd(["query", "rows", "--csv", "--limit", "1"]);
   assert.equal(csv.status, 0, csv.stderr);
   assert.equal(csv.stdout, "Name,Owner.Name\nA,User\n");
   assert.equal(csv.stderr, trailer);
-  const uncapped = sfd(["query", "rows", "--csv"]);
+  const uncapped = sfd(["query", "rows", "--csv", "--no-limit"]);
   assert.equal(uncapped.status, 0, uncapped.stderr);
   assert.equal(uncapped.stdout, "Name,Owner.Name\nA,User\nB,\n");
   assert.equal(uncapped.stderr, "");
@@ -538,5 +558,98 @@ test("plugin partial failures retain output and approval precedence on both comm
       assert.equal(result.stderr, "");
     }
     assert.equal(sfd([...args, "-o", "policy-prod"]).status, 4);
+  }
+});
+
+
+test("SIGTERM drains an active operation and removes runtime files", { skip: process.platform === "win32" }, async t => {
+  const dir = mkdtempSync(join(tmpdir(), "sfd-signal-"));
+  const daemon = spawn(process.execPath, [fileURLToPath(new URL("../src/daemon.mjs", import.meta.url))], { env: { ...env, SFD_RUNTIME_DIR: dir }, stdio: "ignore" });
+  t.after(() => { daemon.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); });
+  const pid = join(dir, "sfd.pid");
+  const socket = socketPath(dir);
+  for (let i = 0; i < 200 && !existsSync(pid); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(Number(readFileSync(pid, "utf8")), daemon.pid);
+  const result = await new Promise((resolve, reject) => {
+    const conn = net.connect(socket, () => conn.write(JSON.stringify({ op: "slow", v: PROTOCOL }) + "\n"));
+    let data = "";
+    conn.on("data", chunk => {
+      data += chunk;
+      if (data.includes('"event":"started"')) { process.kill(daemon.pid, "SIGTERM"); data = data.replace(/^.*\n/, ""); }
+    });
+    conn.on("end", () => resolve(JSON.parse(data)));
+    conn.on("error", reject);
+  });
+  assert.equal(result.result, "done");
+  await new Promise(resolve => daemon.once("exit", resolve));
+  assert.equal(existsSync(pid), false);
+  assert.equal(existsSync(socket), false);
+});
+
+test("a second signal forces exit during drain", { skip: process.platform === "win32" }, async t => {
+  const dir = mkdtempSync(join(tmpdir(), "sfd-signal-twice-"));
+  const daemon = spawn(process.execPath, [fileURLToPath(new URL("../src/daemon.mjs", import.meta.url))], { env: { ...env, SFD_RUNTIME_DIR: dir }, stdio: ["ignore", "ignore", "pipe"] });
+  t.after(() => { daemon.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); });
+  const exited = new Promise(resolve => daemon.once("exit", (code, signal) => resolve({ code, signal })));
+  const pid = join(dir, "sfd.pid");
+  for (let i = 0; i < 200 && !existsSync(pid); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(existsSync(pid));
+  const conn = net.connect(socketPath(dir), () => conn.write(JSON.stringify({ op: "slow", v: PROTOCOL }) + "\n"));
+  conn.on("error", () => {});
+  await new Promise(resolve => conn.once("data", resolve));
+  process.kill(daemon.pid, "SIGTERM");
+  const logFile = join(dir, "sfd.log");
+  for (let i = 0; i < 200 && !(existsSync(logFile) && readFileSync(logFile, "utf8").includes("SIGTERM: draining")); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.match(readFileSync(logFile, "utf8"), /SIGTERM: draining/);
+  process.kill(daemon.pid, "SIGINT");
+  assert.deepEqual(await exited, { code: 1, signal: null });
+  assert.equal(existsSync(pid), false);
+});
+
+test("runtime process errors are logged and the daemon continues serving", async t => {
+  const dir = mkdtempSync(join(tmpdir(), "sfd-errors-"));
+  const daemon = spawn(process.execPath, [fileURLToPath(new URL("../src/daemon.mjs", import.meta.url))], { env: { ...env, SFD_RUNTIME_DIR: dir }, stdio: ["ignore", "ignore", "pipe"] });
+  t.after(() => { daemon.kill("SIGKILL"); rmSync(dir, { recursive: true, force: true }); });
+  const logFile = join(dir, "sfd.log");
+  const logs = () => existsSync(logFile) ? readFileSync(logFile, "utf8") : "";
+  const pid = join(dir, "sfd.pid");
+  for (let i = 0; i < 200 && !existsSync(pid); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.ok(existsSync(pid), logs());
+  const send = req => new Promise((resolve, reject) => {
+    const conn = net.connect(socketPath(dir), () => conn.write(JSON.stringify({ ...req, v: PROTOCOL }) + "\n"));
+    let data = "";
+    conn.on("data", chunk => { data += chunk; });
+    conn.on("end", () => resolve(JSON.parse(data)));
+    conn.on("error", reject);
+  });
+  for (const [kind, message] of [["rejection", "test rejection"], ["exception", "test exception"]]) {
+    assert.equal((await send({ op: "triggerError", kind })).result, "scheduled");
+    for (let i = 0; i < 200 && !logs().includes(message); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(logs().includes(message), logs());
+    assert.deepEqual((await send({ op: "ping" })).result, { pong: true });
+  }
+});
+
+test("startup exceptions exit nonzero", () => {
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL("../src/daemon.mjs", import.meta.url))], { env: { ...env, SFD_HANDLERS_MODULE: join(tmpdir(), "sfd-missing-handlers.mjs") }, encoding: "utf8" });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /ERR_MODULE_NOT_FOUND/);
+});
+
+test("rest prints nothing for an empty body and keeps non-empty bodies", () => {
+  for (const method of ["PATCH", "DELETE"]) {
+    for (const url of ["/empty", "/blank"]) {
+      const text = sfd(["rest", url, "-X", method]);
+      assert.equal(text.status, 0, text.stderr);
+      assert.equal(text.stdout, "", `${method} ${url}`);
+      assert.equal(text.stderr, "");
+      const json = sfd(["rest", url, "-X", method, "--json"]);
+      assert.equal(json.status, 0, json.stderr);
+      assert.deepEqual(JSON.parse(json.stdout), { status: 0, result: null });
+    }
+    const body = sfd(["rest", "/full", "-X", method]);
+    assert.equal(body.status, 0, body.stderr);
+    assert.deepEqual(JSON.parse(body.stdout), { method, url: "/full" });
+    assert.deepEqual(JSON.parse(sfd(["rest", "/full", "-X", method, "--json"]).stdout), { status: 0, result: { method, url: "/full" } });
   }
 });

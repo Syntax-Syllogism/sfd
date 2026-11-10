@@ -4,10 +4,10 @@ description: "sfd retrieve, sfd tracking, and how sfd deploy keeps source tracki
 ---
 
 `sfd retrieve`, `sfd tracking`, and how `sfd deploy` keeps source tracking in
-step. Source: `src/handlers.mjs` (`retrieve`, `tracking`, `deploy`, and the
-project queue), `src/format.mjs` (`summarizeChanges`, `summarizeRetrieve`,
+step. Source: `src/ops/retrieve.mjs`, `src/ops/tracking.mjs`, `src/ops/deploy.mjs`,
+`src/handlers.mjs` (the project queue), `src/format.mjs` (`summarizeChanges`, `summarizeRetrieve`,
 `formatRetrieve`, `formatTracking`), and `bin/sfd.mjs` (option checks).
-Tests: `test/handlers.test.mjs`, `test/format.test.mjs`, `test/cli.test.mjs`.
+Tests: `test/ops-project.test.mjs`, `test/format.test.mjs`, `test/cli.test.mjs`.
 
 The Salesforce work is done by `@salesforce/source-deploy-retrieve` and
 `@salesforce/source-tracking`, loaded from the `sf` install (see the
@@ -80,15 +80,29 @@ deploy (`--check-only`) changes nothing and does not update tracking.
 
 ## Serialization
 
-Deploy, retrieve and tracking share one queue inside the daemon (`serial()` in
+Deploy, retrieve and tracking share one queue inside the daemon (`projectQueue` in
 `src/handlers.mjs`). Source Deploy Retrieve and source tracking keep
-process-wide state, so these operations never run concurrently in one daemon.
-Operations that do not touch the project (query, describe, REST, Apex, test)
-are not queued.
+process-wide state, so these operations never run concurrently in one daemon,
+except for the orphaned library poll described below. Operations that do not
+touch the project (query, describe, REST, Apex, test) are not queued.
 
-A long deploy therefore delays a retrieve or `sfd tracking` issued
-afterwards, until the deploy finishes or times out. A caller that needs the
-result immediately should wait for the earlier command.
+`SfProject.clearInstances()` is only called through `clearProjects()`, which
+throws unless the handler is running inside the queue. See
+[auth-cache.md](auth-cache.md#sfproject-guard).
+
+A long deploy delays a retrieve or `sfd tracking` issued afterwards until it
+finishes, times out, or its client disconnects. Disconnected requests waiting
+in the queue are dropped before they start. On disconnect during a deploy or
+retrieve wait, sfd releases the queue and logs the operation, org and job ID.
+The org job is not cancelled, and source tracking is not updated by that wait.
+
+The library poll is not cancelled. It keeps running in the background after the
+queue has moved on, so it can overlap the next deploy, retrieve or `tracking`
+call in the same project directory. A retrieve may still write files when that
+poll completes. The poll ends at its own timeout, or when the daemon exits (idle,
+stale, version or stop drain); if the daemon exits first, the retrieve's files are
+not written and sfd does not resume the wait. Retrieve again to pick up the
+changes.
 
 ## Exit codes and timeouts
 
@@ -105,8 +119,8 @@ the wait. The client deadline is extended to that wait plus 60 seconds, and
 
 ## Changing this area
 
-- Keep the conflict rules above in sync with `retrieve` in `src/handlers.mjs`.
-  They are tested in `test/handlers.test.mjs` (refusal before writes, ignore
+- Keep the conflict rules above in sync with `src/ops/retrieve.mjs`.
+  They are tested in `test/ops-project.test.mjs` (refusal before writes, ignore
   conflicts, deletions, queue sharing).
 - Output shape changes belong in `src/format.mjs`, with cases in
   `test/format.test.mjs`.
