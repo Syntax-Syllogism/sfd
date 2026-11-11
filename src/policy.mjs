@@ -16,6 +16,9 @@ const types = ["scratch", "sandbox", "production"];
 /** @type {Record<string, number>} */
 const rank = { allow: 0, ask: 1, deny: 2 };
 const ttl = 10 * 60_000;
+// File times and Date.now() can disagree by a few milliseconds (notably on
+// Windows), so a just-issued token may look slightly in the future.
+const clockSkew = 2000;
 /**
  * @param {string} write
  * @param {string} destructive
@@ -160,7 +163,7 @@ export function consumeConfirm(dir, hash, now = Date.now()) {
   // Rename atomically claims the token, even across processes.
   const claimed = `${file}.${randomUUID()}`;
   try { renameSync(file, claimed); } catch (e) { if (e.code === "ENOENT") return false; throw e; }
-  try { const issued = Math.floor(statSync(claimed).mtimeMs); return now >= issued && now - issued < ttl; }
+  try { const issued = Math.floor(statSync(claimed).mtimeMs); return issued - now < clockSkew && now - issued < ttl; }
   finally { unlinkSync(claimed); }
 }
 

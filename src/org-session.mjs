@@ -1,7 +1,7 @@
 // Daemon-wide Salesforce org state: cached orgs and connections, auth-change
 // invalidation, org safety types, metadata describes, TraceFlags and API usage.
 // Docs: docs/auth-cache.md, docs/request-limits.md, docs/debug-logs.md.
-import { statSync, readdirSync } from "node:fs";
+import { statSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { paths } from "./paths.mjs";
 import { writeOrgTypes } from "./policy.mjs";
@@ -17,6 +17,7 @@ import { ensureTrace, serial } from "./sf-util.mjs";
 /** @typedef {import("./types.js").WithConnOptions} WithConnOptions */
 
 const SESSION_ERRORS = new Set(["INVALID_SESSION_ID", "INVALID_AUTH_HEADER"]);
+const KNOWN_TYPES = new Set(["scratch", "sandbox", "production"]);
 
 /** @param {string} home */
 export function authStamp(home) {
@@ -90,8 +91,8 @@ export function createOrgSession({ core, home, env, onAuthChanged = () => {} }) 
   const runtimeDir = () => paths(env).dir;
   /** @type {string | undefined} */
   let lastWritten;
-  /** @param {Record<string, unknown>} entries */
-  function persistOrgTypes(entries) {
+  function persistOrgTypes() {
+    const entries = Object.keys(cachedUsernames).length ? { ...cachedTypes, $usernames: cachedUsernames } : { ...cachedTypes };
     const text = JSON.stringify(entries);
     if (text === lastWritten) return;
     try {
@@ -99,11 +100,42 @@ export function createOrgSession({ core, home, env, onAuthChanged = () => {} }) 
       lastWritten = text;
     } catch (e) { console.error(`sfd: could not write org types: ${e.message}`); }
   }
+  // Seed from the file an earlier daemon wrote, so a restart does not discard
+  // known types. Only known types are kept; alias entries are re-checked
+  // against the current alias file before first use (pruneAliases).
+  try {
+    const saved = JSON.parse(readFileSync(join(runtimeDir(), "org-types.json"), "utf8"));
+    for (const [key, value] of Object.entries(saved ?? {})) if (key !== "$usernames" && KNOWN_TYPES.has(value)) cachedTypes[key] = value;
+    for (const [alias, username] of Object.entries(saved?.$usernames ?? {})) {
+      if (typeof username === "string" && alias in cachedTypes) cachedUsernames[alias] = username;
+      else delete cachedTypes[alias];
+    }
+  } catch { /* No earlier cache, or an unreadable one. */ }
+  let aliasesChecked = false;
   function clearSafetyTypes() {
     safetyTypes.clear();
     for (const key of Object.keys(cachedTypes)) delete cachedTypes[key];
     for (const key of Object.keys(cachedUsernames)) delete cachedUsernames[key];
-    persistOrgTypes(cachedTypes);
+    persistOrgTypes();
+  }
+  // An org's type is fixed per username, so an auth change keeps the known
+  // types and drops only alias entries whose alias now names another username
+  // (or cannot be resolved). Unknown and pending lookups are retried.
+  async function pruneAliases() {
+    aliasesChecked = true;
+    for (const [username] of safetyTypes) if (!KNOWN_TYPES.has(cachedTypes[username])) safetyTypes.delete(username);
+    /** @type {(alias: string) => string | null | undefined} */
+    let resolve = () => undefined;
+    try {
+      const state = await core.StateAggregator.getInstance();
+      resolve = alias => state.aliases.getUsername(alias);
+    } catch { /* Drop every alias entry below. */ }
+    for (const [alias, username] of Object.entries(cachedUsernames)) {
+      let current;
+      try { current = resolve(alias); } catch { current = undefined; }
+      if (current !== username) { delete cachedUsernames[alias]; delete cachedTypes[alias]; }
+    }
+    persistOrgTypes();
   }
   /** @type {Map<string | undefined, Map<string, Promise<MetadataTypeInfo[]>>>} */
   const typeCache = new Map();
@@ -133,8 +165,10 @@ export function createOrgSession({ core, home, env, onAuthChanged = () => {} }) 
       if (scope === "all") {
         onAuthChanged();
         orgs.clear(); usernames.clear(); traces.clear(); typeCache.clear(); apiUsage.clear();
-        clearSafetyTypes();
+        // An explicit reload starts over; an observed auth change keeps known types.
+        if (observedStamp === undefined) clearSafetyTypes();
         await core.StateAggregator.clearInstanceAsync();
+        if (observedStamp !== undefined) await pruneAliases();
         if (observedStamp !== undefined) stamp = observedStamp;
       } else {
         const { alias, username } = scope;
@@ -148,6 +182,7 @@ export function createOrgSession({ core, home, env, onAuthChanged = () => {} }) 
   async function refreshIfAuthChanged() {
     const now = authStamp(home);
     if (now !== stamp) await invalidate("all", now);
+    else if (!aliasesChecked) await lock.write(async () => { if (!aliasesChecked) await pruneAliases(); });
   }
 
   /**
@@ -236,7 +271,7 @@ export function createOrgSession({ core, home, env, onAuthChanged = () => {} }) 
     const type = /** @type {string} */ (await safetyTypes.get(username));
     cachedTypes[username] = type;
     if (alias) { cachedTypes[alias] = type; cachedUsernames[alias] = username; }
-    persistOrgTypes({ ...cachedTypes, $usernames: cachedUsernames });
+    persistOrgTypes();
     return type;
   }
 

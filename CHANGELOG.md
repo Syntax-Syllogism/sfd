@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-11-11
+
+### Fixed
+
+- Cached org types are no longer wiped when the daemon notices an auth change (for example after `sfd org list` or any CLI write to `alias.json` or `config.json`). Sandboxes stay `sandbox` instead of falling back to `unknown` and production approval prompts in hooks. Only alias entries whose alias now names a different username are dropped. A restarted daemon also keeps the types saved in `org-types.json`
+- A just-issued `--confirm` token is no longer rejected when the file's timestamp is a few milliseconds ahead of the system clock (seen on Windows)
+
 ## [0.8.0] - 2026-11-10
 
 ### Changed

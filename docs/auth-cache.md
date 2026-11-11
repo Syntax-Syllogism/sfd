@@ -19,7 +19,7 @@ race, scoped session error and cache-size cases). The soak case runs with
 | `usernames` (alias to username) | alias | yes | the same keys |
 | `traces` (TraceFlag state) | alias | yes | the same keys |
 | `typeCache` (metadata type lists) | alias | yes | the same keys |
-| `safetyTypes`, `cachedTypes`, `cachedUsernames`, `org-types.json` | username | yes | no; org types are kept |
+| `safetyTypes`, `cachedTypes`, `cachedUsernames`, `org-types.json` | username | only on `sfd reload`; an auth change keeps known types and drops alias entries whose alias now names another username | no; org types are kept |
 | `apiUsage` (last-seen API usage) | alias or username | yes | no |
 | `StateAggregator` instance | process | yes | no |
 | `SfProject` instances | process | only through `clearProjects()` | not applicable |
@@ -34,8 +34,19 @@ forwarding apply.
 - **`"all"`** runs for `sfd reload` and whenever the auth stamp changes.
   `refreshIfAuthChanged` runs at the start of `getOrg` and of `orgList`. The
   global path forwards `onAuthChanged()` with no username, which clears every
-  plugin worker connection, then clears every map in the table, calls
-  `clearSafetyTypes()` and calls `StateAggregator.clearInstanceAsync()`.
+  plugin worker connection, then clears every map in the table and calls
+  `StateAggregator.clearInstanceAsync()`. Safety types depend on the trigger:
+  `sfd reload` calls `clearSafetyTypes()`, while an auth stamp change calls
+  `pruneAliases()`. A username's org type never changes, so `pruneAliases()`
+  keeps every known (`scratch`, `sandbox`, `production`) username entry, drops
+  unknown or pending lookups so they are retried, and removes any alias entry
+  whose alias no longer resolves to the recorded username. If the alias file
+  cannot be read, it removes every alias entry.
+- **Startup.** A new daemon seeds `cachedTypes` and `cachedUsernames` with the
+  known types in an existing `org-types.json`, so a restart does not discard
+  them. The first `getOrg` or `orgList` call runs `pruneAliases()` before using
+  them. The in-process `safetyTypes` lookups are not seeded, so policy checks
+  still detect the type once per daemon.
 - **`{ alias, username }`** runs when `withConn` sees `INVALID_SESSION_ID` or
   `INVALID_AUTH_HEADER`. The username comes from the `Org` that failed. When the
   failure happened during `Org.create`, the username is unknown, so the alias

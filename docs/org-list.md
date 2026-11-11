@@ -96,8 +96,9 @@ fake that carries those values.
 compares the auth stamp: the `*.json` filenames in `~/.sfdx` and the stats of
 the alias and config files in `~/.sf` and `~/.sfdx`. When the stamp changes, the
 daemon runs a global invalidation under the write lock, which clears every
-cached org, trace, metadata type list and safety type, and the `StateAggregator`
-instance. Logins and logouts show up on the next call, without `sfd reload`.
+cached org, trace, metadata type list and the `StateAggregator` instance. Known
+safety types are kept; only alias entries whose alias now names another
+username are dropped. Logins and logouts show up on the next call, without `sfd reload`.
 Token refreshes do not change the stamp. See [auth-cache.md](auth-cache.md).
 
 ## Rewrite hook

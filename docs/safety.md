@@ -74,8 +74,11 @@ queries `Organization` for `IsSandbox`, `OrganizationType` and
 Developer Edition, trial orgs and Dev Hubs count as production. Failed detection
 is `unknown`, which uses production rules.
 
-Detection is cached by username. It is cleared on auth changes and `sfd reload`
-(global invalidation), and kept on a session error for one org. The daemon
+Detection is cached by username. `sfd reload` clears it. An auth change keeps
+known types, since a username's org type never changes, and drops only alias
+entries whose alias now names another username. A session error for one org
+keeps it too. A restarted daemon seeds its cache from an existing
+`org-types.json` and re-checks those aliases before first use. The daemon
 atomically writes a token-free `org-types.json` in its runtime directory for hooks. It rewrites the file only when the serialized
 content changes. A failed write is logged and does not fail the request, so hooks
 may read a stale file until the next successful write. `sfd org --json` includes a

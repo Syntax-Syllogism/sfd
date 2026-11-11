@@ -67,17 +67,34 @@ test("confirmation hashes bind nested inputs and tokens expire and are single us
   assert.throws(() => consumeConfirm(dir, "../escape"), { name: "UsageError" });
 });
 
-function fixture(t, { fields = {}, sandbox = false, fails = false } = {}) {
+// Windows can stamp a new file's mtime slightly ahead of Date.now(); a fresh
+// token must still be accepted, while one far in the future is not.
+test("confirmation tokens tolerate small clock skew between file times and Date.now", t => {
+  const dir = temporary(t);
+  const hash = confirmHash({ skew: true });
+  const path = join(dir, "confirm", hash);
+  const now = Date.now();
+  issueConfirm(dir, hash);
+  utimesSync(path, new Date(now + 50), new Date(now + 50));
+  assert.equal(consumeConfirm(dir, hash, now), true);
+  issueConfirm(dir, hash);
+  utimesSync(path, new Date(now + 3_600_000), new Date(now + 3_600_000));
+  assert.equal(consumeConfirm(dir, hash, now), false);
+});
+
+function fixture(t, { fields = {}, sandbox = false, fails = false, saved, aliases = { prod: "user" } } = {}) {
   const dir = temporary(t), env = { SFD_RUNTIME_DIR: dir, SFD_POLICY: join(dir, "policy.json") };
-  const calls = { queries: 0, writes: 0 };
+  if (saved) writeFileSync(join(dir, "org-types.json"), JSON.stringify(saved));
+  const calls = { queries: 0, writes: 0, aliases };
   const conn = { instanceUrl: "https://example.test", getApiVersion: () => "67.0", query: async () => {
     calls.queries++;
     if (fails) throw Error("offline");
-    return { records: [{ IsSandbox: sandbox }] };
+    return { done: true, records: [{ IsSandbox: sandbox }] };
   } };
   const modules = {
     "@salesforce/core": { Org: { create: async () => ({ getUsername: () => "user", getOrgId: () => "id", getConnection: () => conn }) },
-      AuthInfo: { create: async () => ({ getFields: () => fields }) }, StateAggregator: { clearInstanceAsync: async () => {} } },
+      AuthInfo: { create: async () => ({ getFields: () => fields }) },
+      StateAggregator: { clearInstanceAsync: async () => {}, getInstance: async () => ({ aliases: { getUsername: alias => calls.aliases[alias] } }) } },
     "@salesforce/kit": {},
     "@salesforce/apex-node": { ExecuteService: class { async executeAnonymous() { calls.writes++; return { success: true, compiled: true }; } } }
   };
@@ -104,8 +121,24 @@ test("production apex requires exact single-use confirmation and reports org typ
   assert.equal(f.calls.queries, 2);
   mkdirSync(join(f.dir, ".sfdx"));
   writeFileSync(join(f.dir, ".sfdx", "login.json"), "{}");
+  // An auth change keeps known types: a username's org type never changes.
   await f.handlers.org({ org: "prod" });
-  assert.equal(f.calls.queries, 3);
+  assert.equal(f.calls.queries, 2);
+  assert.deepEqual(JSON.parse(readFileSync(join(f.dir, "org-types.json"))), { user: "production", prod: "production", $usernames: { prod: "user" } });
+  // An alias that now names another username loses its entry until resolved again.
+  f.calls.aliases.prod = "other";
+  writeFileSync(join(f.dir, ".sfdx", "alias.json"), "{}");
+  await f.handlers.query({ org: "prod", query: "SELECT Id FROM Account" });
+  assert.deepEqual(JSON.parse(readFileSync(join(f.dir, "org-types.json"))), { user: "production" });
+});
+
+test("a restarted daemon keeps saved org types and re-checks aliases", async t => {
+  const f = fixture(t, {
+    saved: { user: "sandbox", full: "sandbox", moved: "sandbox", odd: "weird", $usernames: { full: "user", moved: "user" } },
+    aliases: { full: "user", moved: "someone-else" }
+  });
+  await f.handlers.query({ org: "full", query: "SELECT Id FROM Account" });
+  assert.deepEqual(JSON.parse(readFileSync(join(f.dir, "org-types.json"))), { user: "sandbox", full: "sandbox", $usernames: { full: "user" } });
 });
 
 for (const [type, options] of [["scratch", { fields: { expirationDate: "2099-01-01" } }], ["scratch", { fields: { devHubUsername: "hub" } }], ["sandbox", { sandbox: true }], ["unknown", { fails: true }]]) test(`org type ${type}`, async t => {
