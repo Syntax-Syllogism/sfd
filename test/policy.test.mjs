@@ -187,3 +187,19 @@ test("hook username overrides take precedence over cached alias types and alias 
   const input = JSON.stringify({ tool_name: "Bash", tool_input: { command: "sf project deploy start -d src -o uat" } });
   assert.equal(JSON.parse(handle("codex", input, { SFD_RUNTIME_DIR: dir, SFD_POLICY: policyFile }, "linux")).hookSpecificOutput.permissionDecision, "ask");
 });
+
+test("hook asks when the org-type cache exists but cannot be read or parsed", t => {
+  const dir = temporary(t), policyFile = join(dir, "policy.json"), types = join(dir, "org-types.json");
+  writeFileSync(policyFile, JSON.stringify({ version: 1, orgs: { uat: "scratch", user: "production" } }));
+  const input = JSON.stringify({ tool_name: "Bash", tool_input: { command: "sf project deploy start -d src -o uat" } });
+  const decision = () => JSON.parse(handle("codex", input, { SFD_RUNTIME_DIR: dir, SFD_POLICY: policyFile }, "linux")).hookSpecificOutput;
+  // A missing cache is not an error: the alias override applies.
+  assert.equal(decision().permissionDecision, "allow");
+  // Unreadable (stands in for a Windows EBUSY/EPERM sharing violation) and corrupt caches fail closed.
+  mkdirSync(types);
+  assert.equal(decision().permissionDecision, "ask");
+  assert.match(decision().permissionDecisionReason, /cannot validate safety policy/);
+  rmSync(types, { recursive: true });
+  writeFileSync(types, "{");
+  assert.equal(decision().permissionDecision, "ask");
+});

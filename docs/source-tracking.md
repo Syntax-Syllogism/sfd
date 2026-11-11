@@ -27,6 +27,12 @@ sfd retrieve -x manifest/package.xml
 error (exit 2). With no selector, retrieve is "changes-only": it pulls the
 remote changes that source tracking reports, including deletions.
 
+Source tracking can report types the Metadata API cannot retrieve, such as the
+`SFD` DebugLevel that sfd creates for [trace flags](debug-logs.md). The server
+answers with an "Entity type ... is not available in this api version" warning.
+As in `sf`, sfd prints this as a warning and it does not make the retrieve fail.
+If a named component fails, the retrieve still fails with exit 1.
+
 Selector retrieves merge into the project. New components go to the project's
 default package directory.
 

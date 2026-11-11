@@ -147,7 +147,10 @@ sf-style error with `name: "ApprovalRequired"` (or `PolicyDenied`) and
 Claude and Codex rewrite hooks ask the harness for permission when a rewritten
 command's policy decision is ask or deny. They read only local policy and cached
 org types; they never start the daemon or contact Salesforce. An uncached or
-unresolved default target uses unknown. A leading `SF_TARGET_ORG` assignment or
+unresolved default target uses unknown. A missing `org-types.json` means no
+cached types; an `org-types.json` that cannot be read or parsed (for example
+while a Windows virus scanner briefly locks it) makes the hook ask, the same as
+an invalid policy. A leading `SF_TARGET_ORG` assignment or
 explicit `-o` selects the cached org. Each rewritten call in a shell list is
 checked. Plugin `cli.json` rewrites use the effects that `sfd plugin list`
 caches from the plugin's operation descriptors. A command without cached

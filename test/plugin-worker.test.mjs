@@ -64,7 +64,9 @@ test("connections cache by username, invalidate on auth changes, retry safe sess
 
 test("missing plugin-owned Salesforce library produces actionable error", async t => {
   const { call, root } = fixture(t);
-  rmSync(resolve(root, "node_modules"), { recursive: true });
+  // Break the plugin's own copy rather than deleting node_modules: without it, Node keeps searching the temp
+  // dir's ancestors and can load an unrelated @salesforce/core (for example ~/node_modules on a dev machine).
+  rmSync(resolve(root, "node_modules/@salesforce/core/index.cjs"));
   const result = await call("whoami", {}, { targetOrg: "user" });
   assert.equal(result.code, "missing-salesforce-core");
   assert.match(result.actions[0], /dependencies/);

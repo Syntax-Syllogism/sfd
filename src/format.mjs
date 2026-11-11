@@ -265,7 +265,8 @@ export function summarizeChanges(changes, projectDir, state) {
     state: state ?? c.state ?? (c.deleted ? "Deleted" : c.modified ? "Changed" : "Add"),
     type: c.type, fullName: c.fullName ?? c.name,
     path: path ? relative(projectDir, resolve(projectDir, path)) : undefined,
-    ...(c.problem ? { problem: c.problem } : {})
+    // SDR file responses carry a failure's message in `error`.
+    ...(c.problem ?? c.error ? { problem: c.problem ?? c.error } : {})
   })));
   return [...new Map(files.map(f => [JSON.stringify([f.state, f.type, f.fullName, f.path, f.problem]), f])).values()];
 }
@@ -276,7 +277,11 @@ export function summarizeChanges(changes, projectDir, state) {
  */
 export function summarizeRetrieve(result, projectDir) {
   const response = result.response;
-  const files = summarizeChanges(result.getFileResponses(), projectDir);
+  // Source tracking can list types the Metadata API cannot retrieve, such as the DebugLevel sfd creates for
+  // trace flags. The server answers with an anonymous "Failed" entry that repeats a package.xml warning; sf
+  // still reports success, so keep it as a warning only and not as a failed component.
+  const files = summarizeChanges(result.getFileResponses(), projectDir)
+    .filter(f => !(!f.type && !f.fullName && /^Entity type '[^']+' is not available in this api version/.test(f.problem ?? "")));
   return {
     success: Boolean(response.success) && !files.some(f => f.state === "Failed" || f.problem),
     status: response.status, id: response.id, files,

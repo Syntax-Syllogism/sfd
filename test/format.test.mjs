@@ -127,6 +127,21 @@ test("retrieve summaries preserve relative files, failures and warnings; renderi
   const mixedText = formatRetrieve(mixed, "dev");
   assert.match(mixedText, /^PARTIAL: retrieved 1 files from dev \(09S\); 1 failed\n/);
   assert.doesNotMatch(mixedText, /Succeeded/);
+  // A tracked type the Metadata API cannot retrieve (sfd's own DebugLevel) is a warning, as in sf, not a failure.
+  const unsupportedProblem = "Entity type 'DebugLevel' is not available in this api version";
+  const unsupported = summarizeRetrieve({ response: { success: true, status: "Succeeded", id: "09S",
+    messages: [{ fileName: "unpackaged/package.xml", problem: unsupportedProblem }] }, getFileResponses: () => [
+    { state: "Failed", type: "", fullName: "", error: unsupportedProblem, problemType: "Error" },
+    { state: "Created", type: "ApexClass", fullName: "Foo", filePath: "/project/classes/Foo.cls" }
+  ] }, "/project");
+  assert.equal(unsupported.success, true);
+  assert.deepEqual(unsupported.files.map(f => f.fullName), ["Foo"]);
+  assert.equal(formatRetrieve(unsupported, "dev"), `Retrieved 1 files from dev (09S)\n  + ApexClass Foo ${foo}\n  ! ${unsupportedProblem}`);
+  // A named component's `error` is still a failure, and its message is shown.
+  const namedError = summarizeRetrieve({ response: { success: true, status: "Succeeded" },
+    getFileResponses: () => [{ state: "Failed", type: "ApexClass", fullName: "Gone", error: "Entity type 'DebugLevel' is not available in this api version" }] }, "/project");
+  assert.equal(namedError.success, false);
+  assert.match(formatRetrieve(namedError, "dev"), /✖ ApexClass Gone: Entity type/);
   const allFailedOk = formatRetrieve({ ...failed, status: "Succeeded" }, "dev");
   assert.match(allFailedOk, /^FAILED dev\n/);
 });

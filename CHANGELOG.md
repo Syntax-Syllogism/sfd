@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-11-11
+
+### Fixed
+
+- Agent hooks now ask for approval when `org-types.json` exists but cannot be read or parsed, instead of ignoring the cache. Previously a transient `EBUSY`/`EPERM` on Windows (a virus scanner or indexer holding the file) could drop the cached username mapping, let a weaker alias override win, and allow a write to a production org without asking
+- A changes-only `sfd retrieve` no longer reports PARTIAL and exits 1 once sfd has set up a trace flag. Source tracking lists the `SFD` DebugLevel, which the Metadata API cannot retrieve. sfd now treats the server's anonymous "Entity type ... is not available in this api version" entry as a warning, as `sf` does
+- Retrieve failures now show the server's error message for each failed component
+
 ## [0.8.1] - 2026-11-11
 
 ### Fixed

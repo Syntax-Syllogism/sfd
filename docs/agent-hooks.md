@@ -232,6 +232,7 @@ see [plugins.md](plugins.md#direct-commands-and-agent-integration).
 For rewritten calls requiring approval or denied by policy, Claude and Codex
 return `permissionDecision: "ask"` with a reason. They never auto-allow such a
 call. The hook reads only local policy and cached org types; missing types use
-unknown (production rules). The daemon still enforces exit code 4 and
+unknown (production rules). An unreadable or corrupt `org-types.json` makes the
+hook ask. The daemon still enforces exit code 4 and
 `--confirm`. Gemini keeps its existing response shape. See [Safety policy](safety.md)
 for configuration and agent permission rules.

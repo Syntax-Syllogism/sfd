@@ -40,7 +40,11 @@ function approvalReason(calls, env, platform) {
     const dir = env.SFD_RUNTIME_DIR ?? (platform === "win32" ? join(env.LOCALAPPDATA ?? tmpdir(), "sfd") : join(env.XDG_RUNTIME_DIR ?? tmpdir(), `sfd-${process.getuid?.() ?? "user"}`));
     /** @type {Record<string, any>} */
     let cached = {};
-    try { cached = JSON.parse(readFileSync(join(dir, "org-types.json"), "utf8")); } catch {}
+    // Only a missing cache means "no cached types". Any other failure (on Windows, EBUSY/EPERM while
+    // an AV scanner or indexer holds the just-written file; or a corrupt file) would drop the
+    // $usernames mapping and let a weaker alias override win, so fail closed via the outer catch.
+    try { cached = JSON.parse(readFileSync(join(dir, "org-types.json"), "utf8")); }
+    catch (e) { if (/** @type {NodeJS.ErrnoException} */ (e).code !== "ENOENT") throw e; }
     for (const { operation, args, effects } of calls) {
       const alias = args.org ?? env.SF_TARGET_ORG;
       const type = effectiveOrgType(cached[alias], policy, cached.$usernames?.[alias] ?? alias, alias);
