@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-11-19
+
+### Fixed
+
+- Stopped console windows from appearing for daemon child processes on Windows
+
 ## [0.8.3] - 2026-11-17
 
 ### Changed

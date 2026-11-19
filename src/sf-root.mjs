@@ -21,9 +21,9 @@ export function findSfRoot(env = process.env, platform = process.platform) {
 
 /** @param {NodeJS.Platform} platform */
 function whichSf(platform) {
-  if (platform !== "win32") return execFileSync("which", ["sf"], { encoding: "utf8" }).trim();
+  if (platform !== "win32") return execFileSync("which", ["sf"], { encoding: "utf8", windowsHide: true }).trim();
   // `where` lists every match in PATH order; prefer the cmd shim over the extensionless sh script.
-  const found = execFileSync("where", ["sf"], { encoding: "utf8" }).split(/\r?\n/).filter(Boolean);
+  const found = execFileSync("where", ["sf"], { encoding: "utf8", windowsHide: true }).split(/\r?\n/).filter(Boolean);
   return found.find(f => /\.(cmd|exe)$/i.test(f)) ?? found[0];
 }
 

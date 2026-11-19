@@ -73,7 +73,7 @@ export function createSupervisor({ discover, workerPath = fileURLToPath(new URL(
   function start(plugin) {
     let state = workers.get(plugin.root);
     if (state) return state;
-    const child = fork(workerPath, [], { serialization: "advanced", env: { ...env, SFD_PLUGIN_ROOT: plugin.root }, execArgv: [], stdio: ["ignore", "ignore", "pipe", "ipc"] });
+    const child = fork(workerPath, [], { serialization: "advanced", env: { ...env, SFD_PLUGIN_ROOT: plugin.root }, execArgv: [], windowsHide: true, stdio: ["ignore", "ignore", "pipe", "ipc"] });
     if (child.stderr) {
       child.stderr.once("data", () => log("plugin stderr", { source: "plugin", root: plugin.root }));
       child.stderr.resume();
