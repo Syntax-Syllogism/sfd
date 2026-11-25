@@ -22,6 +22,13 @@ export function count(stats, key) {
   if (stats) stats[key] = (stats[key] ?? 0) + 1;
 }
 
+/** @param {number[]} values Sorted from lowest to highest. */
+export function medianOfSorted(values) {
+  if (!values.length) return null;
+  const mid = Math.floor(values.length / 2);
+  return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
+}
+
 /**
  * @param {string} root
  * @param {string | string[]} extension

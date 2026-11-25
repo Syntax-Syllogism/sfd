@@ -51,7 +51,7 @@ version.
 | `sfd org` | Resolved username, org id, instance URL and API version | `sf org display` |
 | `sfd hook <agent>`, `check`, `install`, `uninstall` | Agent integration: rewrite `sf` commands before an agent runs them. See [docs/agent-hooks.md](docs/agent-hooks.md) | |
 | `sfd agents-snippet [--write [file]]` | Print agent instructions, or write them into `AGENTS.md` or `CLAUDE.md`. See [Using sfd with coding agents](#using-sfd-with-coding-agents) | |
-| `sfd discover [--since 30d]` | Report missed sfd opportunities and adoption from local agent transcripts. See [docs/discover.md](docs/discover.md) | |
+| `sfd discover [--since 30d] [--agent claude\|codex\|gemini]… [--project <path>] [--top 10] [--all] [--json] [-h\|--help]` | Report missed sfd opportunities and adoption from local agent transcripts. See [docs/discover.md](docs/discover.md) | |
 | `sfd op <id> [--options-json <json\|@file\|->] [--plan]` | Run a plugin operation or preview its plan; `--quiet` suppresses progress | |
 | `sfd plugin list [--json]` | Plugins, operations, effects and worker memory | |
 | `sfd plugin init [<plugin-root>] [--ops <id,…>] [--write]` | Draft a plugin's `cli.json` from its operations and oclif manifest; review notes go to stderr. See [plugin command tables](#plugin-command-tables) | |
@@ -240,6 +240,8 @@ In POSIX mode, the rewrite hook supports shell lists and pipelines. Eligible pip
 `sfd discover` scans local Claude Code, Codex CLI and Gemini CLI transcripts for
 shell tool calls using `sf`, legacy `sfdx`, or `sfd`. It uses the hook's rewrite
 engine to report rewritable calls, skip reasons, unsupported commands and adoption.
+Its loop-fit table ranks unported sf commands by session reuse and estimated
+startup cost. Use `--all` to show every row.
 It reads local files only, without an org, daemon, network calls or writes.
 
 ```bash

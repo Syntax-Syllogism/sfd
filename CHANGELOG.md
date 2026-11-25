@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-25
+
+### Added
+
+- `sfd discover` ranks unported `sf` commands by loop fit, so the commands best suited to the daemon show up first
+
+### Fixed
+
+- `sfd discover` usage text is now complete
+- `sfd discover` loop fit output now explains which commands are excluded from ranking and why
+
 ## [0.8.4] - 2026-11-19
 
 ### Fixed

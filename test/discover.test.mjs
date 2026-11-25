@@ -7,8 +7,9 @@ import { spawnSync } from "node:child_process";
 import { read as claude } from "../src/discover/claude.mjs";
 import { read as codex } from "../src/discover/codex.mjs";
 import { read as gemini } from "../src/discover/gemini.mjs";
-import { classify, discover, discoverOptions, formatReport } from "../src/discover/index.mjs";
+import { classify, discover, discoverOptions, formatReport, observe } from "../src/discover/index.mjs";
 import { rewrite } from "../src/rewrite.mjs";
+import { loadTable } from "../src/plugin/table-cache.mjs";
 
 const since = new Date("2026-10-01");
 async function fixture(t) {
@@ -138,7 +139,8 @@ test("all readers count missing and invalid candidate timestamps, but not old ca
 
 test("aggregate includes medians, coverage and conservative savings", async t => {
   const { home } = await fixture(t);
-  const report = await discover({ home, since, window: "30d" });
+  const env = { SFD_SF_ROOT: join(home, "missing"), SFD_PLUGIN_PATHS_ONLY: "1", SFD_RUNTIME_DIR: join(home, "runtime") };
+  const report = await discover({ home, since, window: "30d", env });
   assert.deepEqual(report.counts, { rewritable: 4, skipped: 4, unsupported: 1, legacy: 1, adopted: 3 });
   assert.equal(report.sfCalls, 10);
   assert.equal(report.sessions, 3);
@@ -160,8 +162,83 @@ test("aggregate includes medians, coverage and conservative savings", async t =>
     `Scan: 2 malformed, ${report.diagnostics.ignoredEntries} ignored entries, 0 unreadable files.`,
     "Durations include permission wait; savings assume 0.3 s/call. Tokens are chars/4.",
     "Output tokens are potential savings before sfd output, which is not measured. Missing samples are not extrapolated.",
-    "Counts classify shell tool calls once; compound calls use the first sf/sfdx invocation."
+    "Adoption counts each shell tool call once, using the first sf/sfdx invocation in compound calls.",
+    "",
+    "Loop fit (unported sf commands)",
+    "  (none)"
   ].join("\n"));
+});
+
+async function writeJson(file, data) {
+  await mkdir(resolve(file, ".."), { recursive: true });
+  await writeFile(file, JSON.stringify(data));
+}
+
+test("loop fit excludes sf calls with flags before the command ID", () => {
+  const catalog = {
+    commands: new Map([["org:list", { id: "org:list", pluginProvides: false }]]),
+    coveredIds: new Set(),
+    maxDepth: 2
+  };
+  assert.deepEqual(observe("sf org list --json", catalog).commandIds, ["org:list"]);
+  assert.deepEqual(observe("sf --json org list", catalog).commandIds, []);
+});
+
+test("loop fit ranks canonical unported sf commands across sessions using installed metadata", async t => {
+  const { home } = await fixture(t);
+  const runtime = join(home, "runtime");
+  const data = join(home, "sf-data");
+  const root = join(home, "sf-install", "node_modules", "@salesforce", "cli");
+  const corePlugin = join(root, "..", "plugin-deploy");
+  const registryPlugin = join(data, "node_modules", "audit-plugin");
+  const linkedPlugin = join(home, "team-plugin");
+  const echo = join(home, "echo-plugin");
+  const env = { SFD_SF_ROOT: root, SF_DATA_DIR: data, SFD_PLUGIN_PATHS: echo, SFD_RUNTIME_DIR: runtime };
+  await writeJson(join(root, "package.json"), { oclif: { plugins: ["@salesforce/plugin-deploy"] } });
+  await writeJson(join(corePlugin, "package.json"), { name: "@salesforce/plugin-deploy" });
+  await writeJson(join(corePlugin, "oclif.manifest.json"), { commands: {
+    project: {}, "project:deploy:report": { aliases: ["old:deploy:report"] }, "org:display": {}
+  } });
+  await writeJson(join(data, "package.json"), { dependencies: { "audit-plugin": "1.0.0" }, oclif: { plugins: [{ root: linkedPlugin }] } });
+  await writeJson(join(registryPlugin, "oclif.manifest.json"), { commands: { "audit:view": {} } });
+  await writeJson(join(linkedPlugin, "oclif.manifest.json"), { commands: { "team:inspect": {} } });
+  await mkdir(echo);
+  const echoFixture = file => join("test", "fixtures", "plugins", "echo", file);
+  for (const file of ["package.json", "ops.mjs", "oclif.manifest.json"]) await copyFile(echoFixture(file), join(echo, file));
+  const transcripts = join(home, ".claude", "projects", "loop-fit");
+  await mkdir(transcripts);
+  for (const index of [1, 2, 3]) {
+    const name = `loop-fit-${index}.jsonl`;
+    const file = join(transcripts, name);
+    await copyFile(join("test", "fixtures", "discover", name), file);
+    await utimes(file, since, since);
+  }
+  await writeJson(join(runtime, "measurements.json"), { "project:deploy:report": 4, "echo:say": -1, "team:inspect": "8" });
+  const options = { home, env, since, agents: ["claude"], top: 1 };
+  const before = await discover(options);
+  assert.deepEqual(before.loopFit, [
+    {
+      commandId: "project:deploy:report", sessions: 3, calls: 8, medianRepeatsPerSession: 2, p90RepeatsPerSession: 5,
+      startupSeconds: 4, estimatedStartupSeconds: 32, pluginProvides: false, score: 24
+    },
+    {
+      commandId: "echo:say", sessions: 1, calls: 2, medianRepeatsPerSession: 2, p90RepeatsPerSession: 2,
+      startupSeconds: 3, estimatedStartupSeconds: 6, pluginProvides: true, score: 6
+    },
+    ...["audit:view", "project", "team:inspect"].map(commandId => ({
+      commandId, sessions: 1, calls: 1, medianRepeatsPerSession: 1, p90RepeatsPerSession: 1,
+      startupSeconds: 3, estimatedStartupSeconds: 3, pluginProvides: false, score: 3
+    }))
+  ]);
+  assert.doesNotMatch(JSON.stringify(before), /secret-value|old:deploy:report/);
+  const cache = join(runtime, "plugin-table.json");
+  await assert.rejects(access(cache), { code: "ENOENT" });
+  await copyFile(echoFixture("cli.json"), join(echo, "cli.json"));
+  assert.equal(loadTable({ env }).plugins[0].commands.length, 1);
+  await access(cache);
+  const after = await discover(options);
+  assert.deepEqual(after.loopFit, before.loopFit.filter(row => row.commandId !== "echo:say"));
+  assert.deepEqual(after.counts, before.counts);
 });
 
 test("filters by timestamp, file mtime, agent and project path boundary", async t => {
@@ -257,10 +334,19 @@ test("Codex cmd arguments, argv, missing results and malformed arguments", async
 });
 
 test("CLI validates flags and reads fixtures locally without a daemon", async t => {
-  const { home } = await fixture(t);
+  const { home, paths } = await fixture(t);
   const runtime = join(home, "runtime");
+  const root = join(home, "sf-install");
+  const commandIds = Array.from({ length: 16 }, (_, i) => `audit:run-${String(i).padStart(2, "0")}`);
+  await writeJson(join(root, "oclif.manifest.json"), { commands: Object.fromEntries(commandIds.map(id => [id, {}])) });
+  const command = commandIds.map(id => `sf ${id}`).join("; ");
+  const transcript = join(resolve(paths.claude, ".."), "loop-fit.jsonl");
+  await writeJson(transcript, { timestamp: new Date(), message: { content: [{ type: "tool_use", name: "Bash", id: "a", input: { command } }] } });
   const run = (...args) => spawnSync(process.execPath, [resolve("bin/sfd.mjs"), "discover", ...args], {
-    encoding: "utf8", env: { ...process.env, HOME: home, USERPROFILE: home, SFD_RUNTIME_DIR: runtime }, timeout: 10000
+    encoding: "utf8", env: {
+      ...process.env, HOME: home, USERPROFILE: home, SFD_RUNTIME_DIR: runtime,
+      SFD_SF_ROOT: root, SFD_PLUGIN_PATHS_ONLY: "1", SFD_PLUGIN_PATHS: ""
+    }, timeout: 10000
   });
   for (const args of [["--since", "x"], ["--agent", "other"], ["--top", "0"], ["--top", "1.5"], ["extra"], ["--since", "9".repeat(100) + "d"]]) {
     const result = run(...args);
@@ -271,7 +357,16 @@ test("CLI validates flags and reads fixtures locally without a daemon", async t 
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(JSON.parse(result.stdout).agents, ["claude", "codex"]);
   assert.equal(JSON.parse(result.stdout).counts.adopted, 2);
-  assert.equal(run("--help").status, 0);
+  assert.deepEqual(JSON.parse(result.stdout).loopFit.map(row => row.commandId), commandIds);
+  for (const args of [[], ["--all"]]) {
+    const text = run("--since", "30d", "--agent", "claude", "--top", "1", ...args);
+    assert.equal(text.status, 0, text.stderr);
+    assert.match(text.stdout, /Loop fit \(unported sf commands\)/);
+    assert.deepEqual(text.stdout.match(/audit:run-\d+/g), args.length ? commandIds : commandIds.slice(0, 15));
+  }
+  const help = run("--help");
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /--all/);
   await assert.rejects(access(runtime));
   assert.equal(discoverOptions({ since: "12h" }, Date.parse("2026-10-22")).since.toISOString(), "2026-10-21T12:00:00.000Z");
 });

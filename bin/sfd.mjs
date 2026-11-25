@@ -6,7 +6,7 @@ import { call, isRunning, startDaemon, DaemonError, VERSION } from "../src/clien
 import { findProjectDir, resolveTargetOrg } from "../src/project.mjs";
 import { formatMetadataTypes, formatMetadataList, formatOrgList, formatApex, formatLog, formatLogList, formatDeploy, formatTests, formatRetrieve, formatTracking, toCsv } from "../src/format.mjs";
 import { paths, RuntimeDirError } from "../src/paths.mjs";
-import { COMMANDS, DEFAULT_QUERY_LIMIT, commandHelp, commandUsage } from "../src/commands.mjs";
+import { COMMANDS, DEFAULT_QUERY_LIMIT, DISCOVER_ARGS, commandHelp, commandUsage } from "../src/commands.mjs";
 import { helpUsageError, renderCommandManual, renderGuide, renderHelpIndex } from "../src/help-topics.mjs";
 import { snippet, upsertSnippet } from "../src/snippet.mjs";
 import { UsageError } from "../src/usage-error.mjs";
@@ -181,14 +181,14 @@ async function run(argv) {
   if (argv[0] === "discover") {
     const { values, positionals } = parseArgs({ args: argv.slice(1), options: {
       since: { type: "string" }, agent: { type: "string", multiple: true },
-      project: { type: "string" }, top: { type: "string" }, json: { type: "boolean" },
+      project: { type: "string" }, top: { type: "string" }, all: { type: "boolean" }, json: { type: "boolean" },
       help: { type: "boolean", short: "h" }
     }, allowPositionals: true });
-    if (values.help) { print("sfd discover [--since 30d] [--agent claude|codex|gemini]… [--project <path>] [--top 10] [--json]"); return 0; }
+    if (values.help) { print(`sfd discover ${DISCOVER_ARGS}`); return 0; }
     if (positionals.length) throw new UsageError("discover does not accept positional arguments.");
     const { discover, discoverOptions, formatReport } = await import("../src/discover/index.mjs");
     const report = await discover(discoverOptions(values));
-    print(values.json ? report : formatReport(report));
+    print(values.json ? report : formatReport(report, { all: values.all }));
     return 0;
   }
   if (argv[0] === "plugin" && argv[1] === "init") {

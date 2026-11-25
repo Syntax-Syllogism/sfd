@@ -1,25 +1,31 @@
 ---
 title: Discover
-description: "sfd discover: which local transcripts are read, how each shell call is classified, how the savings estimates are derived, the text and --json output, and the diagnostics."
+description: "sfd discover: which local transcripts are read, how each shell call is classified, how the savings estimates and loop-fit ranking are derived, the text and --json output, and the diagnostics."
 ---
 
 `sfd discover`: which local transcripts are read, how each shell call is
-classified, how the savings estimates are derived, the text and `--json`
-output, and the diagnostics. Source: `src/discover/index.mjs` (`discoverOptions`,
-`classify`, `discover`, `formatReport`), `src/discover/shared.mjs` (file
-selection, streaming lines, timestamp filter, output sizing),
+classified, how the savings estimates and loop-fit ranking are derived, the text
+and `--json` output, and the diagnostics. Source: `src/discover/index.mjs`
+(`discoverOptions`, `classify`, `observe`, `discover`, `formatReport`),
+`src/discover/loop-fit.mjs` (manifest catalog, `matchCommandId`, `rankLoopFit`,
+`formatLoopFit`), `src/discover/shared.mjs` (file selection, streaming lines,
+timestamp filter, output sizing, `medianOfSorted`),
 `src/discover/claude.mjs`, `src/discover/codex.mjs` and
 `src/discover/gemini.mjs` (readers), `src/discover/worker.mjs` (one worker thread
 per agent), the `discover` branch in `bin/sfd.mjs` (before the daemon switch),
 the `discover` entry in `COMMANDS` (`src/commands.mjs`), `lex` and `rewrite`
-in `src/rewrite.mjs`, and `split` in `src/shell.mjs` (segment boundaries).
+in `src/rewrite.mjs`, and `split` in `src/shell.mjs` (segment boundaries), `pluginRoots` in
+`src/plugin/discover.mjs` (plugin manifest roots), `loadTable` in
+`src/plugin/table-cache.mjs` (its read-only mode) and `runtimeDirPath` in
+`src/paths.mjs` (the `measurements.json` location).
 Tests: `test/discover.test.mjs`, with fixtures in `test/fixtures/discover/`.
 `test/snippet.test.mjs` also excludes the discover line when it checks that help output is unchanged.
 
 ```bash
 sfd discover
 sfd discover --since 12h --agent claude --agent codex --project /path/to/project
-sfd discover --top 5 --json
+sfd discover --all
+sfd discover --json
 ```
 
 `sfd discover` never starts or contacts the daemon, needs no org or auth, makes
@@ -32,7 +38,8 @@ no network calls and writes nothing. It does not run the commands it finds.
 | `--since <n>d\|<n>h` | Window. Default `30d`. Any other value is a usage error (exit 2). |
 | `--agent claude\|codex\|gemini` | Repeatable. Default: all three. Duplicates are ignored. Any other name is a usage error. |
 | `--project <path>` | Keep only records whose working directory is this path or below it. Relative paths resolve from the current directory. |
-| `--top <n>` | Text output only: how many items each ranked list shows. Positive safe integer, default `10`. |
+| `--top <n>` | Limit each ranked adoption list in text output. Positive safe integer, default `10`. |
+| `--all` | Show every loop-fit row in text output. The default is 15 rows. |
 | `--json` | Print the full report object instead of the text summary. |
 | `-h`, `--help` | Print the usage line. |
 
@@ -114,6 +121,39 @@ Because the classifier is `rewrite()`, changing a mapping or skip rule in
 `src/rewrite.mjs` changes the counts. `docs/agent-hooks.md` covers the rewrite
 rules.
 
+## Loop fit
+
+Loop fit ranks unported `sf` commands in the selected transcripts. It counts
+each `sf` invocation the shell parser recognizes, including multiple invocations
+in a compound call. It finds the longest command prefix before the first flag
+that matches an installed `oclif.manifest.json` command ID or alias. Both
+space-separated and colon-separated forms resolve to the canonical colon-separated
+ID. Calls without a manifest match and calls to `sfdx` or `sfd` are outside
+the ranking.
+
+Discover reads manifests from the installed sf CLI and its core plugins,
+the sf data directory's installed and linked plugins, and roots in
+`SFD_PLUGIN_PATHS`. `SFD_PLUGIN_PATHS_ONLY=1` skips sf data directory discovery.
+The ranking excludes IDs covered by built-in rewrite mappings or by commands
+in the merged sfd plugin table. It matches plugin commands by their `sf` path
+when present and their direct command name otherwise. Coverage applies even
+when the hook would skip a call because of its flags or shell syntax. Discover
+can rebuild a missing or stale table in memory. A row's plugin indicator says
+whether the sf command's provider has an `sfd` key in its `package.json`.
+
+Only sessions using the command contribute to its repeat counts, and a
+single call counts as one repeat. Median averages the middle two values
+for an even number of sessions. P90 is the count at rank
+`ceil(0.9 × sessions)` after sorting counts from lowest to highest.
+
+The per-command startup estimate defaults to 3 seconds. To provide measured
+values, store a JSON object in `measurements.json` in the sfd runtime directory,
+with canonical command IDs as keys and finite nonnegative startup seconds as
+values. For example, `{"project:deploy:report": 2.4}` sets one estimate.
+Missing or invalid measurements use the default. Estimated total startup cost
+is calls × startup seconds. The ranking score is median repeats per session
+× sessions × startup seconds. Ties sort by command ID.
+
 ## Estimates
 
 - **Time saved:** the sum over rewritable calls with a duration of
@@ -144,13 +184,19 @@ Top rewritable: <subcommand> <count> · …
 Scan: <malformed> malformed, <ignored> ignored entries, <unreadable> unreadable files.
 Durations include permission wait; savings assume 0.3 s/call. Tokens are chars/4.
 Output tokens are potential savings before sfd output, which is not measured. Missing samples are not extrapolated.
-Counts classify shell tool calls once; compound calls use the first sf/sfdx invocation.
+Adoption counts each shell tool call once, using the first sf/sfdx invocation in compound calls.
+
+Loop fit (unported sf commands)
+  Command  Sessions  Calls  Median  P90  Startup s/call  Total startup s  sfd plugin  Score
 ```
 
 - `sf calls` is every non-`adopted` call. `sessions` is every transcript file
   with at least one observed call, including ones that only used `sfd`.
-- Each list shows the first `--top` items, or `(none)`. The `not in sfd` list
+- Each ranked adoption list shows the first `--top` items, or `(none)`. The `not in sfd` list
   includes `legacy` subcommands.
+- The loop-fit table shows up to 15 rows, or every row with `--all`. When rows
+  are hidden, it ends with `Showing <n> of <m>. Use --all to show every row.`
+  With no unported commands it shows `(none)`.
 - The time and output parts show `time unknown` or `output unknown` when there
   are no samples.
 
@@ -171,6 +217,10 @@ Counts classify shell tool calls once; compound calls use the first sf/sfdx invo
   `medianOutputTokens` and `outputSamples`. Medians are `null` with no samples.
 - `skipReasons`, `unsupported` and `rewritable`: ranked `{ name, count }` lists,
   unlimited in JSON.
+- `loopFit` is the complete ranked array, independent of `--top` and `--all`.
+  Each row has `commandId`, `sessions`, `calls`, `medianRepeatsPerSession`,
+  `p90RepeatsPerSession`, `startupSeconds`, `estimatedStartupSeconds`,
+  `pluginProvides` (boolean) and `score`.
 
 The report holds no command text, output text, or file contents. Groups are keyed
 by subcommand and reason. The only path it contains is the `--project` value.
@@ -200,14 +250,18 @@ A missing store is not a diagnostic.
   output size.
 - Output sizes are character counts, not tokens. Non-string Claude output is
   measured as JSON, so it can be larger than the text an agent saw.
+- Loop fit reads a command ID only from words before the first flag, and it
+  stops at the first word that is not command-ID-shaped (for example a value
+  containing `@` or `/`). The `sf` CLI rejects flags before the command ID, so
+  loop fit excludes failed invocations such as `sf --json org list`.
 
 ## Changing this area
 
 - To add an agent, write a reader that yields the record shape above. Then add it
   to the `readers` map in `src/discover/index.mjs` and to the map in
   `src/discover/worker.mjs`. Both maps must match, and `discoverOptions` validates
-  `--agent` against the first one. Update the `--agent` text in the `discover`
-  branch of `bin/sfd.mjs` and the table above.
+  `--agent` against the first one. Update the `--agent` text in `DISCOVER_ARGS`
+  in `src/commands.mjs`, the README command table and the flag table above.
 - Keep classification in `rewrite()`, and do not copy its rules into the readers.
   Reader changes should only extract commands and sizes.
 - Do not add command text, output text or file contents to the report. Keep to

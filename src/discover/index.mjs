@@ -8,6 +8,8 @@ import { read as gemini } from "./gemini.mjs";
 import { UsageError } from "../usage-error.mjs";
 import { Worker } from "node:worker_threads";
 import { COMMANDS } from "../commands.mjs";
+import { formatLoopFit, loadLoopFitInputs, matchCommandId, rankLoopFit } from "./loop-fit.mjs";
+import { medianOfSorted } from "./shared.mjs";
 
 const readers = { claude, codex, gemini };
 // Only known command paths may enter the report; trailing words can be private values.
@@ -53,9 +55,9 @@ export function discoverOptions(values, now = Date.now()) {
 
 /**
  * @param {string} command
- * @returns {string[] | undefined}
+ * @returns {string[][]}
  */
-function invocation(command) {
+function invocations(command) {
   const parsed = split(command);
   if (!parsed.skip) {
     /** @type {string[][]} */
@@ -69,14 +71,14 @@ function invocation(command) {
       catch { words = match[2].trim().split(/\s+/); }
       found.push([match[1], ...words]);
     }
-    if (found.length) return found.find(words => words[0] !== "sfd") ?? found[0];
+    if (found.length) return found;
   }
   let tokens;
   try { tokens = lex(command); }
   catch {
     // The rewriter will retain its exact syntax/expansion skip reason.
     const match = /^(?:\s*cd\s+\S+\s*&&)?\s*((?:\w+=\S+\s+)*)(sf|sfd|sfdx)\b(.*)/s.exec(command);
-    return match ? [match[2], ...match[3].trim().split(/\s+/)] : undefined;
+    return match ? [[match[2], ...match[3].trim().split(/\s+/)]] : [];
   }
   /** @type {string[][]} */
   const found = [];
@@ -93,7 +95,7 @@ function invocation(command) {
       found.push(words);
     }
   }
-  return found.find(words => words[0] !== "sfd") ?? found[0];
+  return found;
 }
 
 /** @param {string} reason */
@@ -107,7 +109,12 @@ function reportReason(reason) {
 
 /** @param {string} command */
 export function classify(command) {
-  const words = invocation(command);
+  return classifyInvocation(command, invocations(command));
+}
+
+/** @param {string} command @param {string[][]} found */
+function classifyInvocation(command, found) {
+  const words = found.find(words => words[0] !== "sfd") ?? found[0];
   if (!words) return;
   const subcommand = subcommandName(words);
   if (words[0] === "sfd") return { classification: "adopted", subcommand };
@@ -118,12 +125,19 @@ export function classify(command) {
   return { classification: "skipped", subcommand, reason: reportReason(result.skip) };
 }
 
-const median = (/** @type {number[]} */ values) => {
-  if (!values.length) return null;
-  values.sort((a, b) => a - b);
-  const mid = Math.floor(values.length / 2);
-  return values.length % 2 ? values[mid] : (values[mid - 1] + values[mid]) / 2;
-};
+/** @param {string} command @param {Parameters<typeof matchCommandId>[1]} catalog */
+export function observe(command, catalog) {
+  const found = invocations(command);
+  const classification = classifyInvocation(command, found);
+  if (!classification) return;
+  const commandIds = found.flatMap(([executable, ...args]) => {
+    const id = executable === "sf" ? matchCommandId(args, catalog) : undefined;
+    return id && !catalog.coveredIds.has(id) ? [id] : [];
+  });
+  return { classification, commandIds };
+}
+
+const median = (/** @type {number[]} */ values) => medianOfSorted(values.sort((a, b) => a - b));
 const ranked = (/** @type {Map<string, number>} */ map) => [...map].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
 
 /**
@@ -147,9 +161,9 @@ function scanAgent(agent, options) {
 }
 
 /**
- * @param {{ home?: string, agents?: string[], since?: Date, window?: string, project?: string, top?: number }} [options]
+ * @param {{ home?: string, agents?: string[], since?: Date, window?: string, project?: string, top?: number, env?: NodeJS.ProcessEnv }} [options]
  */
-export async function discover({ home = homedir(), agents = Object.keys(readers), since = new Date(0), window = "all history", project, top = 10 } = {}) {
+export async function discover({ home = homedir(), agents = Object.keys(readers), since = new Date(0), window = "all history", project, top = 10, env = process.env } = {}) {
   /** @type {Record<string, any>} */
   const report = {
     since: since.toISOString(), window, agents, project: project ?? null, top,
@@ -159,7 +173,10 @@ export async function discover({ home = homedir(), agents = Object.keys(readers)
     diagnostics: { malformedEntries: 0, ignoredEntries: 0, unreadableFiles: 0 }
   };
   const sessions = new Set(), groups = new Map(), reasons = new Map(), unsupported = new Map(), rewritable = new Map();
-  const scans = await Promise.all(agents.map(agent => scanAgent(agent, { home, since, project })));
+  /** @type {Map<string, Map<string, number>>} */
+  const callsByCommand = new Map();
+  const { measurements, ...catalog } = loadLoopFitInputs(env);
+  const scans = await Promise.all(agents.map(agent => scanAgent(agent, { home, since, project, catalog })));
   for (const { observations, stats } of scans) {
     for (const [key, value] of Object.entries(stats)) report.diagnostics[key] += value;
     for (const record of observations) {
@@ -167,7 +184,13 @@ export async function discover({ home = homedir(), agents = Object.keys(readers)
       const { classification: kind, subcommand, reason } = classification;
       report.counts[kind]++;
       if (kind !== "adopted") report.sfCalls++;
-      sessions.add(`${record.agent}:${record.session}`);
+      const session = `${record.agent}:${record.session}`;
+      sessions.add(session);
+      for (const commandId of record.commandIds) {
+        const bySession = callsByCommand.get(commandId) ?? new Map();
+        bySession.set(session, (bySession.get(session) ?? 0) + 1);
+        callsByCommand.set(commandId, bySession);
+      }
       const key = JSON.stringify([kind, subcommand, reason]);
       if (!groups.has(key)) groups.set(key, { ...classification, count: 0, durations: [], sizes: [] });
       const group = groups.get(key);
@@ -197,11 +220,12 @@ export async function discover({ home = homedir(), agents = Object.keys(readers)
   report.skipReasons = ranked(reasons);
   report.unsupported = ranked(unsupported);
   report.rewritable = ranked(rewritable);
+  report.loopFit = rankLoopFit(callsByCommand, catalog.commands, measurements);
   return report;
 }
 
-/** @param {Record<string, any>} report */
-export function formatReport(report) {
+/** @param {Record<string, any>} report @param {{all?: boolean}} [options] */
+export function formatReport(report, { all = false } = {}) {
   const list = (/** @type {{ name: string, count: number }[]} */ items) => items.slice(0, report.top).map(item => `${item.name} ${item.count}`).join(" · ") || "(none)";
   const { counts: c, estimates: e, diagnostics: d } = report;
   const time = e.durationSamples ? `~${(e.timeSavedMs / 60000).toFixed(1)} min saved (${e.durationSamples} samples)` : "time unknown";
@@ -216,6 +240,8 @@ export function formatReport(report) {
     `Scan: ${d.malformedEntries} malformed, ${d.ignoredEntries} ignored entries, ${d.unreadableFiles} unreadable files.`,
     "Durations include permission wait; savings assume 0.3 s/call. Tokens are chars/4.",
     "Output tokens are potential savings before sfd output, which is not measured. Missing samples are not extrapolated.",
-    "Counts classify shell tool calls once; compound calls use the first sf/sfdx invocation."
+    "Adoption counts each shell tool call once, using the first sf/sfdx invocation in compound calls.",
+    "",
+    ...formatLoopFit(report.loopFit, all)
   ].join("\n");
 }

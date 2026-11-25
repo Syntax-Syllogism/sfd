@@ -11,20 +11,25 @@ export function sfDataDir(env = process.env, platform = process.platform) {
 }
 /** @param {string} file @returns {any} */
 function readJson(file) { return JSON.parse(readFileSync(file, "utf8")); }
-/** @param {{env?: NodeJS.ProcessEnv}} [config] @returns {PluginInfo[]} */
-export function discoverPlugins({ env = process.env } = {}) {
+/** @param {NodeJS.ProcessEnv} [env] */
+export function pluginRoots(env = process.env) {
   const data = sfDataDir(env);
   const roots = (env.SFD_PLUGIN_PATHS ?? "").split(delimiter).filter(Boolean);
   if (env.SFD_PLUGIN_PATHS_ONLY !== "1") {
     try {
       const registry = readJson(join(data, "package.json"));
       roots.push(...Object.keys(registry.dependencies ?? {}).map(name => join(data, "node_modules", name)));
-      roots.push(...(registry.oclif?.plugins ?? []).filter((/** @type {any} */ p) => p.root).map((/** @type {any} */ p) => p.root));
+      roots.push(...(registry.oclif?.plugins ?? []).filter((/** @type {any} */ p) => typeof p?.root === "string" && p.root).map((/** @type {any} */ p) => p.root));
     } catch { /* An absent registry means no installed user plugins. */ }
   }
+  return roots;
+}
+
+/** @param {{env?: NodeJS.ProcessEnv}} [config] @returns {PluginInfo[]} */
+export function discoverPlugins({ env = process.env } = {}) {
   const seen = new Set();
   const plugins = [];
-  for (const candidate of roots) {
+  for (const candidate of pluginRoots(env)) {
     let root, pkg;
     try { root = realpathSync(candidate); pkg = readJson(join(root, "package.json")); } catch { continue; }
     if (seen.has(root)) continue;

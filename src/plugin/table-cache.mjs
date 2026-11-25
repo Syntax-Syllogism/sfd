@@ -2,7 +2,7 @@ import { readFileSync, statSync, writeFileSync, renameSync, unlinkSync } from "n
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { discoverPlugins, sfDataDir } from "./discover.mjs";
-import { paths } from "../paths.mjs";
+import { paths, runtimeDirPath } from "../paths.mjs";
 import { validateCliTable } from "../../packages/sfd-plugin/validate.mjs";
 import { containedPath, mergeTables } from "./cli-table.mjs";
 
@@ -30,10 +30,10 @@ function writeCache(file, table) {
 }
 
 // The warm path stats known inputs and never imports plugin modules or starts workers.
-export function loadTable({ env = process.env } = {}) {
+export function loadTable({ env = process.env, readOnly = false } = {}) {
   let file, cached;
   try {
-    file = join(paths(env).dir, "plugin-table.json");
+    file = join(readOnly ? runtimeDirPath(env) : paths(env).dir, "plugin-table.json");
     cached = read(file);
     if (Array.isArray(cached.plugins) && cached.plugins.every((/** @type {any} */ p) => Array.isArray(p.commands) && !validateCliTable({ apiVersion: 0, commands: p.commands }).length) && cached.key === keyFor(cached.plugins, env)) return cached;
   } catch { /* Missing/corrupt cache is rebuilt below. */ }
@@ -50,7 +50,7 @@ export function loadTable({ env = process.env } = {}) {
     return entry;
   });
   const table = { key: keyFor(plugins, env), plugins: mergeTables(plugins) };
-  try { if (file) writeCache(file, table); } catch { /* Read-only runtime: use the in-memory table. */ }
+  try { if (file && !readOnly) writeCache(file, table); } catch { /* Read-only runtime: use the in-memory table. */ }
   return table;
 }
 

@@ -66,6 +66,22 @@ test("help lists commands and guides and renders command manuals without startin
   assert.equal(existsSync(join(runtime, "sfd.pid")), false);
 });
 
+test("discover manual and short help list the supported flags in their usage", () => {
+  const manual = sfd(["help", "discover"]);
+  const short = sfd(["discover", "--help"]);
+  const alias = sfd(["discover", "-h"]);
+  for (const result of [manual, short, alias]) {
+    assert.ifError(result.error);
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  const usage = "sfd discover [--since 30d] [--agent claude|codex|gemini]… [--project <path>] [--top 10] [--all] [--json] [-h|--help]";
+  assert.equal(manual.stdout.split("\n")[0], `Usage: ${usage} [options]`);
+  assert.doesNotMatch(manual.stdout, /-o, --target-org/);
+  assert.equal(short.stdout.trim(), usage);
+  assert.equal(alias.stdout, short.stdout);
+});
+
 test("command help is specific for every registered command", () => {
   for (const entry of COMMANDS) {
     const args = [...entry.name.split(" "), "--help"];

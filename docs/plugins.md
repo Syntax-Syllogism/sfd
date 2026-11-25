@@ -68,6 +68,10 @@ accepting an ID so duplicate ownership follows discovery order. Registry
 discovery is cached until registry/package metadata changes; list forces a fresh
 scan, and every operation still checks its module mtime.
 
+`sfd discover`'s loop-fit ranking reads the same roots through `pluginRoots()`
+and does not need the `sfd` manifest. It also reads the sf CLI's core plugins
+and every root's `oclif.manifest.json`. See [discover.md](discover.md#loop-fit).
+
 ## Direct commands and agent integration
 
 A plugin declaring `sfd.cli` exposes its static `cli.json` commands directly,

@@ -26,7 +26,7 @@ Each entry in `src/commands.mjs` has these fields:
 | `agentTip` | snippet | Optional. Format `<usage>: <description>`. See [agents-snippet.md](agents-snippet.md). |
 | `agentGroup` | snippet | Optional. Consecutive entries with the same group share one bullet, joined by `; `. |
 | `targetOrg` | per-command help | Optional. `false` omits the `-o, --target-org` line from `sfd <name> --help`. Set it on commands that take no org (`org list`, `agents-snippet`, `start`, `stop`, `status`, `reload`). Absent means the line is shown. |
-| `json` | per-command help | Optional. `false` omits `--json` for commands without JSON output (`agents-snippet`, `start`, `stop`, `reload`). Absent means the line is shown; `status` supports JSON. |
+| `json` | per-command help | Optional. `false` omits the common `--json` line. Use it for commands without JSON output or commands that list the flag in `args`, such as `discover`. |
 
 The four lifecycle commands (`start`, `stop`, `status`, `reload`) each have their
 own entry, so each has specific help. They share `agentGroup: "lifecycle"`, so
@@ -76,7 +76,7 @@ Its manual, `sfd help <command>`, is a separate output. See
 - `bin/sfd.mjs` picks the key. The `["logs get", "org list"]` list is matched as
   one key first; otherwise the first word is used.
 - `hook` and `discover` print their own usage line and do not use
-  `commandUsage`.
+  `commandUsage`. `discover` shares its argument list with the `COMMANDS` entry.
 - An unknown command with `--help` exits 2. The message `Unknown command: <name>.
   Run sfd --help.` goes to stderr, and stdout is empty. It does not fall back to
   the top-level help.

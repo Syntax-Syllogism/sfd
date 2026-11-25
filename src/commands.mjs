@@ -1,4 +1,5 @@
 export const DEFAULT_QUERY_LIMIT = 2000;
+export const DISCOVER_ARGS = "[--since 30d] [--agent claude|codex|gemini]… [--project <path>] [--top 10] [--all] [--json] [-h|--help]";
 
 export const COMMANDS = [
   {
@@ -133,11 +134,13 @@ export const COMMANDS = [
   },
   {
     "name": "discover",
-    "args": "[--since 30d]",
+    "args": DISCOVER_ARGS,
     "summary": "Report missed sfd opportunities in local agent transcripts",
     "agentTip": "[--since 30d]: local transcript adoption report",
     "docs": [{ "file": "discover.md" }],
-    "agentGroup": "agents"
+    "agentGroup": "agents",
+    "targetOrg": false,
+    "json": false
   },
   {
     name: "op",

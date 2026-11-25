@@ -8,6 +8,16 @@ const cache = new Map();
 
 export class RuntimeDirError extends Error {}
 
+/** Locate runtime metadata for commands that only read it.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @param {NodeJS.Platform} [platform]
+ */
+export function runtimeDirPath(env = process.env, platform = process.platform) {
+  return platform === "win32"
+    ? env.SFD_RUNTIME_DIR ?? join(env.LOCALAPPDATA ?? tmpdir(), "sfd")
+    : env.SFD_RUNTIME_DIR ?? join(env.XDG_RUNTIME_DIR ?? tmpdir(), `sfd-${process.getuid?.() ?? "user"}`);
+}
+
 // Unix socket paths are capped near 108 bytes, so keep the runtime dir short.
 /**
  * @param {NodeJS.ProcessEnv} [env]
@@ -17,9 +27,7 @@ export class RuntimeDirError extends Error {}
 export function runtimeDir(env = process.env, platform = process.platform) {
   const key = JSON.stringify([platform, env.SFD_RUNTIME_DIR ?? null, env.XDG_RUNTIME_DIR ?? null, env.LOCALAPPDATA ?? null]);
   if (cache.has(key)) return /** @type {string} */ (cache.get(key));
-  const base = platform === "win32"
-    ? env.SFD_RUNTIME_DIR ?? join(env.LOCALAPPDATA ?? tmpdir(), "sfd")
-    : env.SFD_RUNTIME_DIR ?? join(env.XDG_RUNTIME_DIR ?? tmpdir(), `sfd-${process.getuid?.() ?? "user"}`);
+  const base = runtimeDirPath(env, platform);
   try {
     mkdirSync(base, { recursive: true, mode: 0o700 });
     if (platform !== "win32") {
